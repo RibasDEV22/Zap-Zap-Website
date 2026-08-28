@@ -189,7 +189,7 @@ body {
 .btn-avatar-select { font-size: 13px; color: var(--accent); cursor: pointer; font-weight: 500; }
 .auth-toggle { display: flex; justify-content: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
 
-/* LAYOUT COMPLETO DA APLICAÇÃO (FULLSCREEN REAL - SEM PAINEL FLUTUANTE) */
+/* LAYOUT COMPLETO DA APLICAÇÃO */
 .app-window {
     width: 100vw;
     height: 100vh;
