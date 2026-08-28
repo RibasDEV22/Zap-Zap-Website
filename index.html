@@ -4,7 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zap Zap - Voz e Mensagens</title>
-    <link rel="stylesheet" href="css/styles.css">
+
+    <!-- TRATAMENTO DE FALLBACK DE ARQUIVOS (Busca na raiz se não achar na subpasta) -->
+    <script>
+        function handleResourceError(element, type) {
+            if (element.dataset.retried) return; // Evita loop infinito se também não existir na raiz
+            element.dataset.retried = "true";
+
+            const fileName = element.getAttribute(type === 'css' ? 'href' : 'src').split('/').pop();
+            console.warn(`[Zap Zap] Arquivo não encontrado na subpasta. Tentando carregar da raiz: ./${fileName}`);
+
+            if (type === 'css') {
+                element.href = `./${fileName}`;
+            } else if (type === 'js') {
+                const newScript = document.createElement('script');
+                newScript.src = `./${fileName}`;
+                document.body.appendChild(newScript);
+            }
+        }
+    </script>
+
+    <!-- ESTILO PRINCIPAL -->
+    <link rel="stylesheet" href="css/styles.css" onerror="handleResourceError(this, 'css')">
 </head>
 <body>
 
@@ -146,11 +167,11 @@
             </div>
             <h2 id="call-user-name">Usuário</h2>
             <div id="call-status-text" class="call-status">Conectando...</div>
-            
+
             <div id="call-actions-calling" class="call-actions hidden">
                 <button class="btn-reject btn-full" onclick="endCall()">Cancelar Chamada</button>
             </div>
-            
+
             <div id="call-actions-incoming" class="call-actions hidden">
                 <button id="btn-accept-call" class="btn-accept" onclick="acceptCall()">Atender</button>
                 <button id="btn-reject-call" class="btn-reject" onclick="rejectCall()">Recusar</button>
@@ -182,7 +203,8 @@
         </div>
     </div>
 
-    <script src="js/updater.js"></script>
-    <script src="js/app.js"></script>
+    <!-- SCRIPTS COM FALLBACK SE NÃO ESTIVEREM EM JS/ -->
+    <script src="js/updater.js" onerror="handleResourceError(this, 'js')"></script>
+    <script src="js/app.js" onerror="handleResourceError(this, 'js')"></script>
 </body>
 </html>
