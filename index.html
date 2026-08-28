@@ -5,27 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zap Zap - Voz e Mensagens</title>
 
-    <!-- TRATAMENTO DE FALLBACK DE ARQUIVOS (Busca na raiz se não achar na subpasta) -->
-    <script>
-        function handleResourceError(element, type) {
-            if (element.dataset.retried) return; // Evita loop infinito se também não existir na raiz
-            element.dataset.retried = "true";
-
-            const fileName = element.getAttribute(type === 'css' ? 'href' : 'src').split('/').pop();
-            console.warn(`[Zap Zap] Arquivo não encontrado na subpasta. Tentando carregar da raiz: ./${fileName}`);
-
-            if (type === 'css') {
-                element.href = `./${fileName}`;
-            } else if (type === 'js') {
-                const newScript = document.createElement('script');
-                newScript.src = `./${fileName}`;
-                document.body.appendChild(newScript);
-            }
-        }
-    </script>
-
     <!-- ESTILO PRINCIPAL -->
-    <link rel="stylesheet" href="css/styles.css" onerror="handleResourceError(this, 'css')">
+    <link rel="stylesheet" href="./css/styles.css">
 </head>
 <body>
 
@@ -46,19 +27,19 @@
         </div>
     </div>
 
-    <!-- INTERFACE DE ATUALIZAÇÃO OBRIGATÓRIA -->
+    <!-- INTERFACE DE ATUALIZAÇÃO / NOVIDADES -->
     <div id="update-screen" class="update-overlay hidden">
         <div class="update-box">
             <div class="update-header">
                 <div class="update-icon">🚀</div>
-                <h2>Atualização Disponível</h2>
-                <p id="update-version-text">Uma nova versão está disponível</p>
+                <h2>Novidades</h2>
+                <p id="update-version-text">Confira as novidades disponíveis</p>
             </div>
 
             <div id="update-step-info" class="update-step">
                 <div class="changelog-title">O que há de novo:</div>
                 <div id="update-changelog" class="update-changelog">Buscando detalhes...</div>
-                <button id="btn-start-update" class="btn-primary btn-full" onclick="startUpdateProcess()">Atualizar Agora</button>
+                <button id="btn-start-update" class="btn-primary btn-full">Atualizar Agora</button>
             </div>
 
             <div id="update-step-progress" class="update-step hidden">
@@ -203,8 +184,8 @@
         </div>
     </div>
 
-    <!-- SCRIPTS COM FALLBACK SE NÃO ESTIVEREM EM JS/ -->
-    <script src="js/updater.js" onerror="handleResourceError(this, 'js')"></script>
-    <script src="js/app.js" onerror="handleResourceError(this, 'js')"></script>
+    <!-- SCRIPTS DA APLICAÇÃO -->
+    <script src="./js/updater.js"></script>
+    <script src="./js/app.js"></script>
 </body>
 </html>
