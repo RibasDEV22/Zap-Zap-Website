@@ -15,7 +15,7 @@ function createWindow() {
     minHeight: 600,
     title: "Zap Zap",
     autoHideMenuBar: true,
-    show: false, // Evita flash da janela/CMD antes da interface carregar
+    show: false, // Evita flash da janela antes da interface carregar
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -26,12 +26,12 @@ function createWindow() {
   win.setMenu(null);
   win.loadFile(path.join(__dirname, 'index.html'));
 
-  // Exibe a janela apenas quando o conteúdo estiver pronto para renderizar
+  // Exibe a janela apenas quando o conteúdo estiver pronto
   win.once('ready-to-show', () => {
     win.show();
   });
 
-  // Previne a abertura do CMD ou navegadores externos indesejados ao clicar em links/download
+  // Abre links externos no navegador padrão em vez de criar janelas internas
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http:') || url.startsWith('https:')) {
       shell.openExternal(url);
@@ -40,34 +40,29 @@ function createWindow() {
   });
 }
 
-// Função para limpar dados de sessão e garantir inicialização limpa
-async function clearAppSession() {
+// Limpeza preventiva de cache temporário (sem apagar o localStorage/Sessão)
+async function clearAppCache() {
   try {
     if (session.defaultSession) {
-      await session.defaultSession.clearStorageData();
       await session.defaultSession.clearCache();
     }
   } catch (err) {
-    console.error('[Session] Erro ao limpar sessão:', err);
+    console.error('[Session] Erro ao limpar cache:', err);
   }
 }
 
 app.whenReady().then(async () => {
-  await clearAppSession();
+  await clearAppCache();
 
+  // Concede permissões automáticas de mídia (microfone) e notificações
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'notifications') {
+    if (permission === 'media' || permission === 'notifications' || permission === 'pointerLock') {
       return callback(true);
     }
     callback(false);
   });
 
   createWindow();
-});
-
-// Força a limpeza completa quando o aplicativo for fechado
-app.on('before-quit', async () => {
-  await clearAppSession();
 });
 
 app.on('window-all-closed', () => {
