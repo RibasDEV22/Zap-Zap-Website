@@ -5,7 +5,6 @@ const NOVIDADES_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main
 
 let pendingDownloadUrl = null;
 
-// Verifica se está rodando em um ambiente nativo (Electron ou WebView/App)
 function isNativeApp() {
     const ua = navigator.userAgent.toLowerCase();
     const isElectron = ua.includes('electron') || !!window.require || (typeof process !== 'undefined' && process.versions && process.versions.electron);
@@ -31,13 +30,13 @@ async function checkForUpdates() {
         if (isNewerVersion(CURRENT_VERSION, latestVersion)) {
             const platform = detectPlatform();
 
-            const targetAsset = release.assets.find(asset => {
+            const targetAsset = release.assets ? release.assets.find(asset => {
                 const name = asset.name.toLowerCase();
                 if (platform === 'android') {
                     return name.endsWith('.apk') || name.includes('app.apk');
                 }
                 return name.endsWith('.exe') || name.includes('setup.exe');
-            });
+            }) : null;
 
             pendingDownloadUrl = targetAsset ? targetAsset.browser_download_url : release.html_url;
 
@@ -90,7 +89,6 @@ function showUpdateModal(versionTag, changelog, platform) {
 
     if (changelogEl) changelogEl.textContent = changelog;
 
-    // Se estiver no navegador, apenas mostra o botão de fechar/entendi
     if (btnStartUpdate) {
         if (!native) {
             btnStartUpdate.textContent = 'Entendi';
@@ -105,7 +103,6 @@ function showUpdateModal(versionTag, changelog, platform) {
 }
 
 function startUpdateProcess() {
-    // Impede o download no navegador Web
     if (!pendingDownloadUrl || !isNativeApp()) return;
 
     const stepInfo = document.getElementById('update-step-info');
