@@ -1,13 +1,34 @@
 const WS_URL = 'wss://zap-zap-24qi.onrender.com';
 
+// Configuração WebRTC com servidores STUN e TURN de fallback
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:openrelay.metered.ca:80' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelay',
+      credential: 'openrelay'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelay',
+      credential: 'openrelay'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelay',
+      credential: 'openrelay'
+    }
   ]
 };
 
 let ws = null;
+let pingInterval = null;
 let currentUser = null;
 let activeChatTarget = null;
 let isMuted = false;
@@ -15,9 +36,69 @@ let isRegisterMode = false;
 let userAvatarBase64 = null;
 let allContacts = [];
 
+// Gerenciador de áudio com fallback sintetizado via Web Audio API
 const soundNotification = new Audio('NotificationSound.mp3');
 const soundCall = new Audio('CallSound.mp3');
 soundCall.loop = true;
+
+let audioCtx = null;
+let syntheticRingtoneInterval = null;
+
+function getAudioContext() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) audioCtx = new AudioContextClass();
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
+
+function playSyntheticBeep() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+  } catch (e) {
+    console.warn('[Audio] Sintetizador indisponível:', e);
+  }
+}
+
+function playNotificationSound() {
+  soundNotification.currentTime = 0;
+  soundNotification.play().catch(() => {
+    playSyntheticBeep();
+  });
+}
+
+function startRingtoneSound() {
+  soundCall.currentTime = 0;
+  soundCall.play().catch(() => {
+    stopRingtoneSound();
+    syntheticRingtoneInterval = setInterval(() => {
+      playSyntheticBeep();
+    }, 1000);
+  });
+}
+
+function stopRingtoneSound() {
+  soundCall.pause();
+  soundCall.currentTime = 0;
+  if (syntheticRingtoneInterval) {
+    clearInterval(syntheticRingtoneInterval);
+    syntheticRingtoneInterval = null;
+  }
+}
 
 let currentCall = {
   peerConnection: null,
@@ -52,6 +133,12 @@ function connectWebSocket() {
     console.log('[WS] Conectado ao servidor');
     updateNetworkStatus('online', 'Conectado');
 
+    // Manter conexão ativa (Keepalive Ping)
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => {
+      sendWS({ type: 'ping' });
+    }, 25000);
+
     const saved = localStorage.getItem('zap_session');
     if (saved) {
       try {
@@ -69,6 +156,7 @@ function connectWebSocket() {
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+      if (data.type === 'pong') return;
       handleServerMessage(data);
     } catch (err) {
       console.error('[WS] Erro ao processar JSON:', err);
@@ -81,6 +169,7 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    if (pingInterval) clearInterval(pingInterval);
     updateNetworkStatus('connecting', 'Reconectando...');
     setTimeout(connectWebSocket, 3000);
   };
@@ -139,7 +228,7 @@ function handleServerMessage(data) {
       break;
 
     case 'call_incoming':
-      soundCall.play().catch(() => {});
+      startRingtoneSound();
       currentCall.targetUser = data.caller;
       currentCall.pendingOffer = data.offer;
       showPushNotification(`Chamada Recebida`, `@${data.caller} está te ligando...`);
@@ -148,27 +237,24 @@ function handleServerMessage(data) {
 
     case 'call_offline':
     case 'call_error':
-      soundCall.pause();
-      soundCall.currentTime = 0;
+      stopRingtoneSound();
       alert(data.message || `Usuário indisponível.`);
       cleanupCall();
       break;
 
     case 'call_rejected':
-      soundCall.pause();
-      soundCall.currentTime = 0;
+      stopRingtoneSound();
       alert(`@${data.from || 'O usuário'} recusou a chamada.`);
       cleanupCall();
       break;
 
     case 'call_answered':
-      soundCall.pause();
-      soundCall.currentTime = 0;
+      stopRingtoneSound();
       handleCallAnswered(data.answer);
       break;
 
     case 'call_ice_candidate':
-      if (currentCall.peerConnection && currentCall.peerConnection.remoteDescription) {
+      if (currentCall.peerConnection && currentCall.peerConnection.remoteDescription && currentCall.peerConnection.remoteDescription.type) {
         currentCall.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(console.error);
       } else {
         pendingIceCandidates.push(data.candidate);
@@ -227,6 +313,8 @@ function previewAvatar(event) {
 
 function handleAuthSubmit(event) {
   event.preventDefault();
+  getAudioContext(); // Prepara permissão de áudio no clique do usuário
+
   const usernameInput = document.getElementById('auth-username').value.trim();
   const passwordInput = document.getElementById('auth-password').value.trim();
   const displayNameInput = document.getElementById('auth-displayname').value.trim();
@@ -322,6 +410,7 @@ function filterContacts() {
 }
 
 function selectContact(contact) {
+  getAudioContext();
   activeChatTarget = contact.username;
   renderContacts(allContacts);
 
@@ -429,6 +518,7 @@ function toggleMicrophone() {
 }
 
 async function startCall(targetUserOverride) {
+  getAudioContext();
   const target = targetUserOverride || activeChatTarget;
   if (!target) {
     alert('Selecione um usuário para iniciar a chamada.');
@@ -454,18 +544,19 @@ async function startCall(targetUserOverride) {
 
     sendWS({ type: 'call_initiate', callee: target, offer });
     
-    soundCall.play().catch(() => {});
+    startRingtoneSound();
     openCallModal(target, 'Chamando...', 'calling');
   } catch (err) {
+    console.error('[WebRTC] Erro ao iniciar chamada:', err);
     alert('Erro ao acessar o microfone ou dispositivo de áudio.');
     cleanupCall();
   }
 }
 
 async function acceptCall() {
+  getAudioContext();
   try {
-    soundCall.pause();
-    soundCall.currentTime = 0;
+    stopRingtoneSound();
 
     currentCall.localStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -487,6 +578,7 @@ async function acceptCall() {
     sendWS({ type: 'call_answer', caller: currentCall.targetUser, answer });
     updateCallModalState('Em Chamada', 'active');
   } catch (err) {
+    console.error('[WebRTC] Erro ao aceitar chamada:', err);
     cleanupCall();
   }
 }
@@ -517,7 +609,7 @@ function setupPeerConnection() {
     }
     
     remoteAudio.srcObject = event.streams[0];
-    remoteAudio.play().catch(e => console.log('Autoplay bloqueado pelo sistema:', e));
+    remoteAudio.play().catch(e => console.log('Autoplay do áudio remoto ajustado:', e));
   };
 
   currentCall.peerConnection = pc;
@@ -535,11 +627,11 @@ async function processPendingIceCandidates() {
   while (pendingIceCandidates.length > 0) {
     const candidate = pendingIceCandidates.shift();
     try {
-      if (currentCall.peerConnection) {
+      if (currentCall.peerConnection && currentCall.peerConnection.remoteDescription) {
         await currentCall.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
       }
     } catch (e) {
-      console.error('[WebRTC] Erro ao adicionar ICE:', e);
+      console.error('[WebRTC] Erro ao adicionar candidato ICE reservado:', e);
     }
   }
 }
@@ -552,8 +644,7 @@ function endCall() {
 }
 
 function cleanupCall() {
-  soundCall.pause();
-  soundCall.currentTime = 0;
+  stopRingtoneSound();
 
   if (currentCall.localStream) {
     currentCall.localStream.getTracks().forEach(t => t.stop());
@@ -624,11 +715,6 @@ async function showSettings() {
 
 function hideSettings() {
   document.getElementById('settings-modal')?.classList.add('hidden');
-}
-
-function playNotificationSound() {
-  soundNotification.currentTime = 0;
-  soundNotification.play().catch(() => {});
 }
 
 function showPushNotification(title, body) {
