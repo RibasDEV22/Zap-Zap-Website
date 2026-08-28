@@ -15,6 +15,12 @@
     --warning: #d9a441;
     --msg-sent: #005c4b;
     --msg-received: #202c33;
+
+    /* Suporte a Notch e Gestos do Android (Safe Area Insets) */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * {
@@ -24,31 +30,39 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     user-select: none;
     -webkit-font-smoothing: antialiased;
+    
+    /* Prevenção de comportamentos indesejados no toque do Android */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
 }
 
 body {
     background-color: var(--bg-dark);
     color: var(--text-main);
     height: 100vh;
+    height: -webkit-fill-available;
     width: 100vw;
     display: flex;
     justify-content: center;
     align-items: center;
     overflow: hidden;
+    
+    /* Evita que o Android faça "pull-to-refresh" arrastando a tela para baixo */
+    overscroll-behavior-y: none;
 }
 
-/* Scrollbar personalizada e discreta */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Scrollbar personalizada */
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(134, 150, 160, 0.25); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(134, 150, 160, 0.45); }
 
 .hidden { display: none !important; opacity: 0; pointer-events: none; }
 
 /* BARRA DE STATUS DA CONEXÃO */
 .network-bar {
     position: fixed;
-    top: 0;
+    top: var(--safe-top);
     left: 0;
     right: 0;
     z-index: 3000;
@@ -63,13 +77,17 @@ body {
 .network-bar.online { background: var(--accent); color: #0b141a; opacity: 0; pointer-events: none; transform: translateY(-100%); }
 .network-bar.offline { background: var(--danger); color: #ffffff; opacity: 1; transform: translateY(0); }
 
-/* MODAIS E OVERLAYS */
+/* MODAIS E OVERLAYS COM RESPEITO À NOTCH DO ANDROID */
 .update-overlay, .splash-overlay, .auth-overlay, .modal-overlay, .call-modal {
     position: fixed;
     inset: 0;
-    background: rgba(11, 20, 26, 0.88);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+    background: rgba(11, 20, 26, 0.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     z-index: 2000;
     display: flex;
     align-items: center;
@@ -81,7 +99,7 @@ body {
     background: var(--header-bg);
     border: 1px solid var(--border);
     padding: 24px;
-    border-radius: 16px;
+    border-radius: 20px;
     width: 90%;
     max-width: 420px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
@@ -184,21 +202,19 @@ body {
     background-position: center;
     transition: transform 0.2s ease;
 }
-.avatar-preview:hover { transform: scale(1.03); }
+.avatar-preview:active { transform: scale(0.95); }
 
-.btn-avatar-select { font-size: 13px; color: var(--accent); cursor: pointer; font-weight: 500; }
+.btn-avatar-select { font-size: 13px; color: var(--accent); cursor: pointer; font-weight: 500; padding: 6px; }
 .auth-toggle { display: flex; justify-content: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
 
-/* LAYOUT COMPLETO DA APLICAÇÃO */
+/* LAYOUT COMPLETO DA APLICAÇÃO (AJUSTADO PARA SAFE AREAS) */
 .app-window {
     width: 100vw;
     height: 100vh;
+    height: -webkit-fill-available;
     background: var(--panel-bg);
     display: flex;
     overflow: hidden;
-    border-radius: 0;
-    border: none;
-    box-shadow: none;
 }
 
 /* SIDEBAR E CONTATOS */
@@ -210,10 +226,13 @@ body {
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
 }
 
 .user-header {
-    padding: 12px 16px;
+    padding: 14px 16px;
     background: var(--header-bg);
     display: flex;
     align-items: center;
@@ -221,8 +240,8 @@ body {
 }
 
 .avatar {
-    width: 42px;
-    height: 42px;
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
     background: var(--accent);
     color: #0b141a;
@@ -246,12 +265,12 @@ body {
 .search-area { padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .search-area input, .input-field {
     width: 100%;
-    padding: 10px 14px;
-    border-radius: 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--bg-dark);
     color: var(--text-main);
-    font-size: 14px;
+    font-size: 15px; /* Evita que o iOS/Android dê zoom automático ao focar */
     outline: none;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -264,18 +283,18 @@ body {
 .contact-item {
     display: flex;
     align-items: center;
-    padding: 12px 16px;
+    padding: 14px 16px;
     gap: 12px;
     cursor: pointer;
     border-bottom: 1px solid var(--border-subtle);
     border-left: 3px solid transparent;
     transition: background 0.15s ease, border-color 0.15s ease;
 }
-.contact-item:hover { background: rgba(255, 255, 255, 0.03); }
+.contact-item:active { background: rgba(255, 255, 255, 0.08); }
 .contact-item.active { background: var(--header-bg); border-left-color: var(--accent); }
 .contact-details { flex: 1; overflow: hidden; }
-.contact-name { font-size: 14px; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
-.contact-status { font-size: 12px; color: var(--text-muted); }
+.contact-name { font-size: 15px; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+.contact-status { font-size: 13px; color: var(--text-muted); }
 .contact-status.online-text { color: var(--accent); font-weight: 500; }
 
 /* ÁREA DO CHAT */
@@ -287,10 +306,13 @@ body {
     position: relative;
     background-image: radial-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px);
     background-size: 24px 24px;
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-right: var(--safe-right);
 }
 
 .chat-header {
-    padding: 12px 20px;
+    padding: 12px 16px;
     background: var(--header-bg);
     border-bottom: 1px solid var(--border);
     display: flex;
@@ -300,7 +322,7 @@ body {
 }
 
 .chat-user-info { flex: 1; }
-.chat-user-info h3 { font-size: 15px; font-weight: 600; }
+.chat-user-info h3 { font-size: 16px; font-weight: 600; }
 .status-indicator { font-size: 12px; color: var(--text-muted); }
 .status-indicator.online { color: var(--accent); font-weight: 500; }
 
@@ -320,7 +342,7 @@ body {
 
 .chat-messages {
     flex: 1;
-    padding: 20px 24px;
+    padding: 16px 18px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -328,10 +350,10 @@ body {
 }
 
 .message {
-    max-width: 65%;
+    max-width: 78%;
     padding: 10px 14px;
-    border-radius: 10px;
-    font-size: 14px;
+    border-radius: 12px;
+    font-size: 14.5px;
     line-height: 1.45;
     word-break: break-word;
     overflow-wrap: anywhere;
@@ -351,11 +373,11 @@ body {
 }
 
 .chat-input-area {
-    padding: 12px 16px;
+    padding: 12px 14px;
     background: var(--header-bg);
     border-top: 1px solid var(--border);
     display: flex;
-    gap: 12px;
+    gap: 10px;
     align-items: center;
 }
 .chat-input-area input {
@@ -363,10 +385,10 @@ body {
     padding: 12px 16px;
     background: var(--bg-input);
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: 24px;
     color: var(--text-main);
     outline: none;
-    font-size: 14px;
+    font-size: 15px;
     transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 .chat-input-area input:focus {
@@ -374,121 +396,127 @@ body {
     background: var(--bg-dark);
 }
 
-/* PAINEL DE CHAMADA WEBRTC */
-.call-content { text-align: center; align-items: center; }
+/* PAINEL DE CHAMADA WEBRTC (INTERFACE DE CHAMADA MOBILE ESTILO ANDROID) */
+.call-modal {
+    background: rgba(11, 20, 26, 0.96);
+}
+
+.call-content { 
+    text-align: center; 
+    align-items: center; 
+    width: 100%; 
+    max-width: 360px;
+    padding: 32px 24px;
+}
+
 .call-avatar-pulse {
-    width: 90px;
-    height: 90px;
+    width: 110px;
+    height: 110px;
     border-radius: 50%;
     background: var(--header-bg);
     border: 3px solid var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 36px;
+    font-size: 44px;
     box-shadow: 0 0 30px var(--accent-glow);
     animation: pulse 1.8s infinite ease-in-out;
-    margin: 0 auto;
+    margin: 0 auto 10px auto;
 }
 
-.call-status { font-size: 14px; color: var(--text-muted); }
-.call-actions { display: flex; gap: 10px; width: 100%; justify-content: center; }
+.call-status { font-size: 15px; color: var(--text-muted); }
 
-/* PAINEL DE CONFIGURAÇÕES */
-.modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
-.setting-group { display: flex; flex-direction: column; gap: 8px; font-size: 13px; text-align: left; }
+/* ÁREA DE BOTÕES COM ÁREA DE TOQUE EXPANDIDA (TOUCH TARGETS PARA ANDROID) */
+.call-actions { 
+    display: flex; 
+    gap: 14px; 
+    width: 100%; 
+    justify-content: center;
+    margin-top: 10px;
+}
 
-/* BOTÕES GERAIS */
-.btn-primary {
-    background: var(--accent);
-    color: #0b141a;
-    border: none;
-    padding: 10px 18px;
-    border-radius: 8px;
+/* BOTÕES GERAIS E INTERAÇÕES MOBILE */
+.btn-primary, .btn-secondary, .btn-accept, .btn-reject, .btn-call {
+    min-height: 48px; /* Recomendado pela diretriz de acessibilidade do Android */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    font-size: 15px;
     font-weight: 700;
     cursor: pointer;
+    border: none;
     transition: background 0.2s ease, transform 0.1s ease;
 }
-.btn-primary:hover { background: var(--accent-hover); }
-.btn-primary:active { transform: scale(0.98); }
 
-.btn-secondary {
-    background: var(--bg-input);
-    color: var(--text-main);
-    border: 1px solid var(--border);
-    padding: 10px 18px;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background 0.2s ease;
-}
-.btn-secondary:hover { background: var(--header-bg); }
+.btn-primary { background: var(--accent); color: #0b141a; }
+.btn-primary:active { transform: scale(0.96); background: var(--accent-hover); }
 
-.btn-accept {
-    background: var(--accent);
-    color: #0b141a;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.2s ease;
-}
-.btn-accept:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border); }
+.btn-secondary:active { transform: scale(0.96); background: var(--header-bg); }
 
-.btn-reject {
-    background: var(--danger);
-    color: #ffffff;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.2s ease;
-}
-.btn-reject:hover { background: var(--danger-hover); }
+.btn-accept { background: var(--accent); color: #0b141a; padding: 0 24px; flex: 1; }
+.btn-accept:active { transform: scale(0.96); background: var(--accent-hover); }
 
-.btn-call {
-    background: var(--accent);
-    color: #0b141a;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s ease;
-}
-.btn-call:hover { background: var(--accent-hover); }
+.btn-reject { background: var(--danger); color: #ffffff; padding: 0 24px; flex: 1; }
+.btn-reject:active { transform: scale(0.96); background: var(--danger-hover); }
+
+.btn-call { min-height: 38px; padding: 0 16px; background: var(--accent); color: #0b141a; font-size: 14px; }
+.btn-call:active { transform: scale(0.95); }
 
 .btn-full { width: 100%; }
+
 .btn-icon, .btn-logout {
     background: transparent;
     border: none;
     cursor: pointer;
-    font-size: 18px;
+    font-size: 20px;
     color: var(--text-main);
-    opacity: 0.8;
-    transition: opacity 0.2s ease, transform 0.1s ease;
+    opacity: 0.85;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.btn-icon:hover, .btn-logout:hover { opacity: 1; transform: scale(1.08); }
-.btn-link { background: transparent; border: none; color: var(--accent); cursor: pointer; text-decoration: underline; font-size: 13px; }
+.btn-icon:active, .btn-logout:active { opacity: 1; transform: scale(0.92); }
+
+.btn-link { background: transparent; border: none; color: var(--accent); cursor: pointer; text-decoration: underline; font-size: 14px; padding: 4px; }
 .mobile-only { display: none; }
 
-/* ANIMAÇÕES & RESPONSIVIDADE MOBILE */
-@keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.97); }
-    to { opacity: 1; transform: scale(1); }
-}
-
-@keyframes pulse {
-    0%, 100% { transform: scale(1); box-shadow: 0 0 15px var(--accent-glow); }
-    50% { transform: scale(1.05); box-shadow: 0 0 30px var(--accent-glow); }
-}
-
+/* RESPONSIVIDADE FULL-SCREEN ANDROID MODERNO */
 @media (max-width: 768px) {
-    .mobile-only { display: block; }
-    .sidebar { width: 100%; }
-    .chat-view { display: none; }
-    .app-window.active-chat .sidebar { display: none; }
-    .app-window.active-chat .chat-view { display: flex; }
-    .message { max-width: 82%; }
+    .mobile-only { display: inline-flex; }
+    
+    .sidebar { 
+        width: 100%; 
+        border-right: none;
+    }
+    
+    .chat-view { 
+        display: none; 
+    }
+    
+    /* Alternância nativa de telas no Android ao clicar em um contato */
+    .app-window.active-chat .sidebar { 
+        display: none; 
+    }
+    
+    .app-window.active-chat .chat-view { 
+        display: flex; 
+        width: 100%;
+    }
+    
+    .message { 
+        max-width: 85%; 
+    }
+
+    .call-content {
+        height: 100%;
+        justify-content: space-around;
+        padding-top: calc(var(--safe-top) + 40px);
+        padding-bottom: calc(var(--safe-bottom) + 40px);
+        background: transparent;
+        border: none;
+        box-shadow: none;
+    }
 }
