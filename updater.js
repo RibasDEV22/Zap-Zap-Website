@@ -5,6 +5,14 @@ const NOVIDADES_RAW_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main
 
 let pendingDownloadUrl = null;
 
+// Verifica se está rodando em um ambiente nativo (Electron ou WebView/App)
+function isNativeApp() {
+    const ua = navigator.userAgent.toLowerCase();
+    const isElectron = ua.includes('electron') || !!window.require || (typeof process !== 'undefined' && process.versions && process.versions.electron);
+    const isWebView = ua.includes('wv') || ua.includes('webview') || !!window.Android || !!window.Capacitor || !!window.cordova;
+    return isElectron || isWebView;
+}
+
 function detectPlatform() {
     const ua = navigator.userAgent.toLowerCase();
     if (ua.includes('android')) return 'android';
@@ -67,18 +75,38 @@ function showUpdateModal(versionTag, changelog, platform) {
     const updateOverlay = document.getElementById('update-screen');
     const versionText = document.getElementById('update-version-text');
     const changelogEl = document.getElementById('update-changelog');
+    const btnStartUpdate = document.getElementById('btn-start-update');
+
+    const native = isNativeApp();
 
     if (versionText) {
-        const fileType = platform === 'android' ? 'Pacote APK' : 'Instalador Windows (.exe)';
-        versionText.textContent = `Versão ${versionTag} disponível (${fileType})`;
+        if (native) {
+            const fileType = platform === 'android' ? 'Pacote APK' : 'Instalador Windows (.exe)';
+            versionText.textContent = `Versão ${versionTag} disponível (${fileType})`;
+        } else {
+            versionText.textContent = `Novidades da Versão ${versionTag}`;
+        }
     }
 
     if (changelogEl) changelogEl.textContent = changelog;
+
+    // Se estiver no navegador, apenas mostra o botão de fechar/entendi
+    if (btnStartUpdate) {
+        if (!native) {
+            btnStartUpdate.textContent = 'Entendi';
+            btnStartUpdate.onclick = finishUpdate;
+        } else {
+            btnStartUpdate.textContent = 'Atualizar Agora';
+            btnStartUpdate.onclick = startUpdateProcess;
+        }
+    }
+
     if (updateOverlay) updateOverlay.classList.remove('hidden');
 }
 
 function startUpdateProcess() {
-    if (!pendingDownloadUrl) return;
+    // Impede o download no navegador Web
+    if (!pendingDownloadUrl || !isNativeApp()) return;
 
     const stepInfo = document.getElementById('update-step-info');
     const stepProgress = document.getElementById('update-step-progress');
@@ -106,7 +134,6 @@ function startUpdateProcess() {
         if (progress >= 100) {
             clearInterval(interval);
 
-            // Se rodar dentro do Electron, usa a API nativa para abrir sem abrir janela do CMD
             if (window.require) {
                 try {
                     const { shell } = window.require('electron');
