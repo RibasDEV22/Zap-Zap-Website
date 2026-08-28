@@ -2,7 +2,15 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Ajustado viewport para Android: bloqueio de zoom acidental e suporte a Safe Area (notch) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- Suporte a navegação e barra de status do Android / PWA -->
+    <meta name="theme-color" content="#111b21">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="format-detection" content="telephone=no">
+
     <title>Zap Zap - Voz e Mensagens</title>
 
     <!-- ESTILO PRINCIPAL -->
@@ -139,9 +147,9 @@
         </main>
     </div>
 
-    <!-- MODAL DE CHAMADA WEBRTC -->
+    <!-- MODAL DE CHAMADA WEBRTC (Adicionado playsinline para Android WebView) -->
     <div id="call-modal" class="call-modal hidden">
-        <audio id="remote-audio" autoplay></audio>
+        <audio id="remote-audio" autoplay playsinline></audio>
         <div class="call-content">
             <div class="call-avatar-container">
                 <div id="call-avatar" class="call-avatar-pulse">📞</div>
