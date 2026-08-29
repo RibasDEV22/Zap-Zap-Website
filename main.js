@@ -1,7 +1,8 @@
-const { app, BrowserWindow, session, shell } = require('electron');
+const { app, BrowserWindow, session, shell, Notification, powerSaveBlocker } = require('electron');
 const path = require('path');
 
-// Evita múltiplas instâncias do app rodando em segundo plano
+let powerBlockerId = null;
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
@@ -13,34 +14,46 @@ function createWindow() {
     height: 800,
     minWidth: 400,
     minHeight: 600,
-    title: "Zap Zap",
+    title: 'Zap Zap',
     autoHideMenuBar: true,
-    show: false, // Evita flash da janela antes da interface carregar
+    show: false,
+    backgroundColor: '#0b141a',
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      webSecurity: true
+      webSecurity: true,
+      backgroundThrottling: false
     }
   });
 
   win.setMenu(null);
   win.loadFile(path.join(__dirname, 'index.html'));
 
-  // Exibe a janela apenas quando o conteúdo estiver pronto
   win.once('ready-to-show', () => {
     win.show();
   });
 
-  // Abre links externos no navegador padrão em vez de criar janelas internas
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http:') || url.startsWith('https:')) {
       shell.openExternal(url);
     }
     return { action: 'deny' };
   });
+
+  win.on('minimize', () => {
+    if (powerBlockerId === null) {
+      powerBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    }
+  });
+
+  win.on('restore', () => {
+    if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
+      powerSaveBlocker.stop(powerBlockerId);
+      powerBlockerId = null;
+    }
+  });
 }
 
-// Limpeza preventiva de cache temporário (sem apagar o localStorage/Sessão)
 async function clearAppCache() {
   try {
     if (session.defaultSession) {
@@ -54,21 +67,33 @@ async function clearAppCache() {
 app.whenReady().then(async () => {
   await clearAppCache();
 
-  // Concede permissões automáticas de mídia (microfone) e notificações
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media' || permission === 'notifications' || permission === 'pointerLock') {
-      return callback(true);
-    }
-    callback(false);
+    const allowed = ['media', 'notifications', 'pointerLock', 'fullscreen', 'clipboard-read'];
+    callback(allowed.includes(permission));
   });
+
+  if (Notification.isSupported()) {
+    console.log('[Electron] Notificações nativas suportadas');
+  }
 
   createWindow();
 });
 
 app.on('window-all-closed', () => {
+  if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
+    powerSaveBlocker.stop(powerBlockerId);
+  }
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+app.on('second-instance', () => {
+  const wins = BrowserWindow.getAllWindows();
+  if (wins.length) {
+    if (wins[0].isMinimized()) wins[0].restore();
+    wins[0].focus();
+  }
 });
