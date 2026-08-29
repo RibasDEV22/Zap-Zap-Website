@@ -1,199 +1,254 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <!-- Ajustado viewport para Android: bloqueio de zoom acidental e suporte a Safe Area (notch) -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    
-    <!-- Suporte a navegação e barra de status do Android / PWA -->
-    <meta name="theme-color" content="#111b21">
+    <meta name="theme-color" content="#111b21" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f0f2f5" media="(prefers-color-scheme: light)">
+    <meta name="color-scheme" content="dark light">
     <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zap Zap">
+    <meta name="application-name" content="Zap Zap">
     <meta name="format-detection" content="telephone=no">
-
+    <meta name="msapplication-TileColor" content="#111b21">
+    <meta name="msapplication-tap-highlight" content="no">
     <title>Zap Zap - Voz e Mensagens</title>
-
-    <!-- ESTILO PRINCIPAL -->
     <link rel="stylesheet" href="./css/styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
 </head>
 <body>
+    <div id="network-bar" class="network-bar connecting hidden" role="status" aria-live="polite">Conectando...</div>
+    <div id="in-app-toast" class="in-app-toast" aria-live="polite"></div>
 
-    <!-- BARRA DE STATUS DA CONEXÃO -->
-    <div id="network-bar" class="network-bar connecting hidden">Conectando ao servidor...</div>
-
-    <!-- TELA DE SPLASH (CARREGAMENTO INICIAL) -->
+    <!-- SPLASH -->
     <div id="splash-screen" class="splash-overlay">
         <div class="splash-content">
-            <div class="splash-logo-box">
-                <div class="splash-logo-placeholder">⚡</div>
-            </div>
+            <div class="splash-logo-box"><div>⚡</div></div>
             <h1 class="splash-title">Zap Zap</h1>
-            <p class="splash-sub">Iniciando protocolo de voz e presença...</p>
-            <div class="splash-loader">
-                <div id="splash-bar" class="splash-bar"></div>
-            </div>
+            <p class="splash-sub">Iniciando...</p>
+            <div class="splash-loader"><div id="splash-bar" class="splash-bar"></div></div>
         </div>
     </div>
 
-    <!-- INTERFACE DE ATUALIZAÇÃO / NOVIDADES -->
+    <!-- UPDATE -->
     <div id="update-screen" class="update-overlay hidden">
         <div class="update-box">
             <div class="update-header">
                 <div class="update-icon">🚀</div>
-                <h2>Novidades</h2>
-                <p id="update-version-text">Confira as novidades disponíveis</p>
+                <h2 id="update-title">Novidades</h2>
+                <p id="update-version-text">Confira as novidades</p>
             </div>
-
             <div id="update-step-info" class="update-step">
-                <div class="changelog-title">O que há de novo:</div>
-                <div id="update-changelog" class="update-changelog">Buscando detalhes...</div>
-                <button id="btn-start-update" class="btn-primary btn-full">Atualizar Agora</button>
+                <div class="changelog-title">O que ha de novo:</div>
+                <div id="update-changelog" class="update-changelog">Buscando...</div>
+                <button id="btn-start-update" class="btn-primary btn-full" type="button">Atualizar Agora</button>
             </div>
-
             <div id="update-step-progress" class="update-step hidden">
-                <p id="update-status-msg">Baixando os novos arquivos...</p>
-                <div class="progress-bar-container">
-                    <div id="update-progress-bar" class="progress-bar"></div>
-                </div>
+                <p id="update-status-msg">Baixando...</p>
+                <div class="progress-bar-container"><div id="update-progress-bar" class="progress-bar"></div></div>
                 <span id="update-percentage-text">0%</span>
             </div>
-
             <div id="update-step-complete" class="update-step hidden">
                 <div class="complete-icon">✅</div>
-                <h3>Atualização Pronta!</h3>
-                <p>O instalador foi baixado com sucesso. Execute-o para concluir.</p>
-                <button class="btn-primary btn-full" onclick="finishUpdate()">Ok, Entendi</button>
+                <h3>Atualizacao Pronta!</h3>
+                <p>Execute o instalador para concluir.</p>
+                <button class="btn-primary btn-full" type="button" onclick="finishUpdate()">Ok</button>
             </div>
         </div>
     </div>
 
-    <!-- TELA DE AUTENTICAÇÃO -->
+    <!-- AUTH -->
     <div id="auth-screen" class="auth-overlay">
         <div class="auth-box">
             <h2 id="auth-title">Entrar no Zap Zap</h2>
-            <div id="auth-error-msg" class="auth-error hidden"></div>
-
-            <form id="auth-form" onsubmit="handleAuthSubmit(event)">
+            <div id="auth-error-msg" class="auth-error hidden" role="alert"></div>
+            <form id="auth-form" onsubmit="handleAuthSubmit(event)" novalidate>
                 <div id="register-fields" class="register-fields hidden">
                     <div class="avatar-upload-box">
-                        <div id="avatar-preview" class="avatar-preview">📷</div>
+                        <div id="avatar-preview" class="avatar-preview" onclick="document.getElementById('avatar-input').click()">📷</div>
                         <label for="avatar-input" class="btn-avatar-select">Escolher Foto</label>
                         <input type="file" id="avatar-input" accept="image/*" class="hidden" onchange="previewAvatar(event)">
                     </div>
-                    <input type="text" id="auth-displayname" class="input-field" placeholder="Nome de Exibição" maxlength="30">
+                    <input type="text" id="auth-displayname" class="input-field" placeholder="Nome de Exibicao" maxlength="30" autocomplete="name">
                 </div>
-
-                <input type="text" id="auth-username" class="input-field" placeholder="Usuário (@exemplo)" required autocomplete="username" pattern="[a-zA-Z0-9_]{3,20}" title="3-20 caracteres (letras, números e _)">
+                <input type="text" id="auth-username" class="input-field" placeholder="Usuario (@exemplo)" required autocomplete="username" pattern="[a-zA-Z0-9_]{3,20}" spellcheck="false">
                 <input type="password" id="auth-password" class="input-field" placeholder="Senha" required autocomplete="current-password" minlength="4">
-
                 <button type="submit" id="auth-btn-submit" class="btn-primary btn-full">Entrar</button>
             </form>
-
             <div class="auth-toggle">
-                <span id="auth-toggle-text">Não tem uma conta?</span>
+                <span id="auth-toggle-text">Nao tem uma conta?</span>
                 <button id="auth-toggle-btn" type="button" class="btn-link" onclick="toggleAuthMode(event)">Cadastrar-se</button>
             </div>
         </div>
     </div>
 
-    <!-- INTERFACE PRINCIPAL -->
+    <!-- APP -->
     <div id="app-container" class="app-window hidden">
         <aside class="sidebar">
             <header class="user-header">
                 <div id="my-avatar" class="avatar">U</div>
                 <div class="user-info">
                     <div class="user-name-row">
-                        <span id="my-display-name">Carregando...</span>
+                        <span id="my-display-name">...</span>
                         <span id="my-role" class="role-badge role-Membro">Membro</span>
                     </div>
                     <div id="my-username" class="user-handle">@usuario</div>
                 </div>
-                <button class="btn-icon" title="Configurações" onclick="showSettings()">⚙️</button>
-                <button class="btn-logout" title="Sair" onclick="logout()">🚪</button>
+                <button id="theme-toggle-btn" class="btn-icon" type="button" title="Tema" onclick="toggleTheme()">☀️</button>
+                <button class="btn-icon" type="button" title="Configuracoes" onclick="showSettings()">⚙️</button>
+                <button class="btn-logout" type="button" title="Sair" onclick="logout()">🚪</button>
             </header>
-
             <div class="search-area">
-                <input type="text" id="search-input" placeholder="Buscar membros..." onkeyup="filterContacts()">
+                <input type="search" id="search-input" placeholder="Buscar membros..." onkeyup="filterContacts()" autocomplete="off" spellcheck="false">
             </div>
-
             <div id="contacts-list" class="contacts-scroll"></div>
         </aside>
 
         <main class="chat-view">
             <header id="chat-header" class="chat-header hidden">
-                <button class="btn-icon mobile-only" title="Voltar" onclick="backToContacts()">⬅️</button>
+                <button class="btn-icon mobile-only" type="button" onclick="backToContacts()">⬅️</button>
                 <div id="chat-user-avatar" class="avatar">U</div>
                 <div class="chat-user-info">
                     <h3 id="chat-user-name">Contato</h3>
                     <span id="chat-user-status" class="status-indicator">Offline</span>
                 </div>
                 <div class="chat-actions-top">
-                    <button class="btn-call" title="Iniciar Chamada de Voz" onclick="startCall()">📞 Chamada</button>
+                    <button class="btn-icon" type="button" title="Apagar conversa" onclick="deleteCurrentConversation()">🗑️</button>
+                    <button class="btn-call" type="button" title="Chamada" onclick="startCall()">📞</button>
                 </div>
             </header>
 
             <div id="empty-state" class="empty-state">
                 <div class="empty-icon">🎧</div>
-                <h2>Canal de Comunicação Conectado</h2>
-                <p>Selecione um membro na lista lateral para conversar ou iniciar uma chamada de voz.</p>
+                <h2>Canal Conectado</h2>
+                <p>Selecione um membro para conversar, gravar audio ou iniciar chamada.</p>
             </div>
 
             <div id="chat-messages" class="chat-messages hidden"></div>
 
+            <!-- Reply bar -->
+            <div id="reply-bar" class="reply-bar hidden">
+                <div class="reply-bar-info">
+                    <span class="reply-bar-user"></span>
+                    <span class="reply-bar-text"></span>
+                </div>
+                <button type="button" class="btn-icon" onclick="clearReply()">✕</button>
+            </div>
+
+            <!-- Recording indicator -->
+            <div id="recording-bar" class="recording-bar hidden">
+                <span class="rec-dot"></span>
+                <span>Gravando...</span>
+                <button type="button" class="btn-secondary" onclick="cancelVoiceRecord()">Cancelar</button>
+                <button type="button" class="btn-primary" onclick="stopVoiceRecord()">Enviar</button>
+            </div>
+
             <footer id="chat-input-area" class="chat-input-area hidden">
-                <input type="text" id="message-input" placeholder="Digite uma mensagem..." onkeydown="handleKeyPress(event)" autocomplete="off">
-                <button class="btn-primary" onclick="sendMessage()">Enviar</button>
+                <label for="file-input" class="btn-attach" title="Anexar">📎</label>
+                <input type="file" id="file-input" class="hidden" accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.txt,.zip" onchange="handleFileSelect(event)">
+                <button id="btn-record" type="button" class="btn-record" title="Gravar audio" onclick="isRecording ? stopVoiceRecord() : startVoiceRecord()">🎤</button>
+                <input type="text" id="message-input" placeholder="Mensagem..." onkeydown="handleKeyPress(event)" autocomplete="off" maxlength="2000">
+                <button class="btn-primary" type="button" onclick="sendMessage()">Enviar</button>
             </footer>
         </main>
     </div>
 
-    <!-- MODAL DE CHAMADA WEBRTC (Adicionado playsinline para Android WebView) -->
+    <!-- Message action menu (long-press) -->
+    <div id="msg-action-menu" class="msg-action-menu hidden">
+        <button type="button" data-action="reply" onclick="handleMenuAction('reply')">↩️ Responder</button>
+        <button type="button" data-action="edit" onclick="handleMenuAction('edit')">✏️ Editar</button>
+        <button type="button" data-action="forward" onclick="handleMenuAction('forward')">↪️ Encaminhar</button>
+        <button type="button" data-action="delete" onclick="handleMenuAction('delete')">🗑️ Apagar</button>
+        <button type="button" onclick="closeMessageMenu()">Fechar</button>
+    </div>
+
+    <!-- CALL -->
     <div id="call-modal" class="call-modal hidden">
         <audio id="remote-audio" autoplay playsinline></audio>
         <div class="call-content">
-            <div class="call-avatar-container">
-                <div id="call-avatar" class="call-avatar-pulse">📞</div>
-            </div>
-            <h2 id="call-user-name">Usuário</h2>
+            <div id="call-avatar" class="call-avatar-pulse">📞</div>
+            <h2 id="call-user-name">Usuario</h2>
             <div id="call-status-text" class="call-status">Conectando...</div>
-
             <div id="call-actions-calling" class="call-actions hidden">
-                <button class="btn-reject btn-full" onclick="endCall()">Cancelar Chamada</button>
+                <button class="btn-reject btn-full" type="button" onclick="endCall()">Cancelar</button>
             </div>
-
             <div id="call-actions-incoming" class="call-actions hidden">
-                <button id="btn-accept-call" class="btn-accept" onclick="acceptCall()">Atender</button>
-                <button id="btn-reject-call" class="btn-reject" onclick="rejectCall()">Recusar</button>
+                <button class="btn-accept" type="button" onclick="acceptCall()">Atender</button>
+                <button class="btn-reject" type="button" onclick="rejectCall()">Recusar</button>
             </div>
-
             <div id="call-actions-active" class="call-actions hidden">
-                <button id="btn-toggle-mic" class="btn-secondary" onclick="toggleMicrophone()">🎙️ Mutar (F4)</button>
-                <button class="btn-reject" onclick="endCall()">Desconectar</button>
+                <button id="btn-toggle-mic" class="btn-secondary" type="button" onclick="toggleMicrophone()">🎙️ Mutar (F4)</button>
+                <button class="btn-reject" type="button" onclick="endCall()">Desconectar</button>
             </div>
         </div>
     </div>
 
-    <!-- MODAL DE CONFIGURAÇÕES DE DISPOSITIVO -->
+    <!-- SETTINGS / PROFILE -->
     <div id="settings-modal" class="modal-overlay hidden">
-        <div class="modal-box">
+        <div class="modal-box settings-box">
             <header class="modal-header">
-                <h3>Configurações de Dispositivo</h3>
-                <button class="btn-icon" onclick="hideSettings()">❌</button>
+                <h3>Configuracoes</h3>
+                <button class="btn-icon" type="button" onclick="hideSettings()">❌</button>
             </header>
-            <div class="modal-body">
-                <div class="setting-group">
-                    <label for="mic-select">Microfone de Entrada:</label>
-                    <select id="mic-select" class="input-field"></select>
-                </div>
+            <div class="modal-body settings-scroll">
+                <section class="setting-section">
+                    <h4>Perfil</h4>
+                    <div class="avatar-upload-box">
+                        <div id="profile-avatar-preview" class="avatar-preview" onclick="document.getElementById('profile-avatar-input').click()">📷</div>
+                        <label for="profile-avatar-input" class="btn-avatar-select">Trocar foto</label>
+                        <input type="file" id="profile-avatar-input" accept="image/*" class="hidden" onchange="previewProfileAvatar(event)">
+                    </div>
+                    <div class="setting-group">
+                        <label>Usuario (nao editavel)</label>
+                        <div id="profile-username" class="input-field readonly-field">@usuario</div>
+                    </div>
+                    <div class="setting-group">
+                        <label for="profile-displayname">Nome de exibicao</label>
+                        <input type="text" id="profile-displayname" class="input-field" maxlength="30">
+                    </div>
+                    <div class="setting-group">
+                        <label for="profile-bio">Biografia</label>
+                        <textarea id="profile-bio" class="input-field" rows="3" maxlength="200" placeholder="Sobre voce..."></textarea>
+                    </div>
+                    <button type="button" class="btn-primary btn-full" onclick="saveProfile()">Salvar perfil</button>
+                </section>
+
+                <section class="setting-section">
+                    <h4>Microfone</h4>
+                    <div class="setting-group">
+                        <label for="mic-select">Dispositivo de entrada</label>
+                        <select id="mic-select" class="input-field" onchange="onMicChange()"></select>
+                    </div>
+                </section>
+
+                <section class="setting-section">
+                    <h4>Processamento de Audio (gravacao)</h4>
+                    <div class="setting-group">
+                        <label for="audio-volume">Volume / Boost: <span id="audio-volume-label">100%</span></label>
+                        <input type="range" id="audio-volume" min="20" max="500" step="10" value="100" oninput="onAudioPrefChange()">
+                    </div>
+                    <div class="setting-group row">
+                        <label><input type="checkbox" id="audio-noise" checked onchange="onAudioPrefChange()"> Reducao de ruido</label>
+                    </div>
+                    <div class="setting-group row">
+                        <label><input type="checkbox" id="audio-smooth" checked onchange="onAudioPrefChange()"> Suavizacao de voz</label>
+                    </div>
+                </section>
+
+                <section class="setting-section">
+                    <h4>Aparencia</h4>
+                    <button type="button" class="btn-secondary btn-full" onclick="toggleTheme()">Alternar tema claro/escuro</button>
+                </section>
             </div>
             <footer class="modal-footer">
-                <button class="btn-primary btn-full" onclick="hideSettings()">Salvar e Fechar</button>
+                <button class="btn-primary btn-full" type="button" onclick="hideSettings()">Fechar</button>
             </footer>
         </div>
     </div>
 
-    <!-- SCRIPTS DA APLICAÇÃO -->
-    <script src="./js/updater.js"></script>
-    <script src="./js/app.js"></script>
+    <script src="./js/updater.js" defer></script>
+    <script src="./js/app.js" defer></script>
 </body>
 </html>
