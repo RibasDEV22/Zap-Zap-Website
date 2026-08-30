@@ -1,25 +1,71 @@
 /* =========================================================
-   ZapZap – media.js
+   ZapZap – media.js (revisado)
    Áudio, gravação, compressão, WebRTC, configurações
+   Melhorias: robustez, compatibilidade e pequenas correções
    ========================================================= */
 
-// ========== PROCESSAMENTO DE ÁUDIO ==========
-function saveAudioPrefs() {
-  localStorage.setItem('zap_audio_prefs', JSON.stringify({
-    volumeBoost: audioVolumeBoost,
-    noiseReduction: audioNoiseReduction,
-    smoothVoice: audioSmoothVoice
-  }));
+/* Helpers utilitários */
+async function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    try {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(new Error('Erro ao ler blob como dataURL'));
+      fr.readAsDataURL(blob);
+    } catch (e) {
+      reject(e);
+    }
+  });
 }
 
+function safeNumber(v, fallback = 100) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/* ========== PREFERÊNCIAS DE ÁUDIO ==========
+   (usa variáveis globais externas quando existentes;
+    caso não existam, aplica valores padrão localmente) */
+
+function getAudioPref(name, def) {
+  try {
+    if (typeof window !== 'undefined' && window[name] !== undefined) return window[name];
+  } catch (e) {}
+  return def;
+}
+
+function saveAudioPrefs() {
+  try {
+    if (!window.localStorage) return;
+    const payload = {
+      volumeBoost: getAudioPref('audioVolumeBoost', 100),
+      noiseReduction: getAudioPref('audioNoiseReduction', true),
+      smoothVoice: getAudioPref('audioSmoothVoice', false)
+    };
+    localStorage.setItem('zap_audio_prefs', JSON.stringify(payload));
+  } catch (e) {
+    console.warn('saveAudioPrefs falhou:', e);
+  }
+}
+
+/* ========== PROCESSAMENTO DE ÁUDIO ==========
+   Funções defensivas, fallback para decodeAudioData e
+   proteção contra contextos inexistentes. */
 async function processAudioBuffer(audioBuffer) {
-  const ctx = getAudioContext();
+  if (!audioBuffer) return audioBuffer;
+
+  const ctx = (typeof getAudioContext === 'function' && getAudioContext()) || null;
   if (!ctx) return audioBuffer;
 
+  // Use OfflineAudioContext para processamento sem bloquear o principal
   const offline = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
   const source = offline.createBufferSource();
   source.buffer = audioBuffer;
   let node = source;
+
+  const audioNoiseReduction = getAudioPref('audioNoiseReduction', true);
+  const audioSmoothVoice = getAudioPref('audioSmoothVoice', false);
+  const audioVolumeBoost = safeNumber(getAudioPref('audioVolumeBoost', 100), 100);
 
   if (audioNoiseReduction) {
     const hp = offline.createBiquadFilter();
@@ -48,6 +94,7 @@ async function processAudioBuffer(audioBuffer) {
   }
 
   const gain = offline.createGain();
+  // valor em [0.05, 5]
   gain.gain.value = Math.min(5, Math.max(0.05, audioVolumeBoost / 100));
   node.connect(gain);
   gain.connect(offline.destination);
@@ -56,12 +103,47 @@ async function processAudioBuffer(audioBuffer) {
   return offline.startRendering();
 }
 
+async function decodeAudioSafe(ctx, arrayBuffer) {
+  // Compatibilidade com navegadores que ainda usam callbacks
+  if (!ctx || !arrayBuffer) throw new Error('Contexto ou buffer inválido');
+  if (ctx.decodeAudioData.length === 1) {
+    // retorna Promise normalmente
+    return ctx.decodeAudioData(arrayBuffer.slice(0));
+  }
+  // fallback callback-style
+  return new Promise((resolve, reject) => {
+    try {
+      ctx.decodeAudioData(arrayBuffer.slice(0), resolve, err => reject(err || new Error('decodeAudioData falhou')));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 async function compressAndProcessAudio(fileOrBlob) {
-  const arrayBuffer = await (fileOrBlob.arrayBuffer ? fileOrBlob.arrayBuffer() : fileOrBlob);
-  const ctx = getAudioContext() || new (window.AudioContext || window.webkitAudioContext)();
-  let audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+  // fileOrBlob pode ser Blob/File ou ArrayBuffer já decodificado
+  const arrayBuffer = await (fileOrBlob && typeof fileOrBlob.arrayBuffer === 'function'
+    ? fileOrBlob.arrayBuffer()
+    : (fileOrBlob instanceof ArrayBuffer ? fileOrBlob : null));
+  if (!arrayBuffer) throw new Error('Dados de áudio inválidos');
+
+  const ctx = (typeof getAudioContext === 'function' && getAudioContext()) || new (window.AudioContext || window.webkitAudioContext)();
+  // decodeAudioData pode lançar; usar decodeAudioSafe para compatibilidade
+  let audioBuffer;
+  try {
+    audioBuffer = await decodeAudioSafe(ctx, arrayBuffer);
+  } catch (err) {
+    console.warn('decodeAudioData falhou, tentando com OfflineAudioContext:', err);
+    // fallback: tentar com OfflineAudioContext decode
+    const offlineTry = new OfflineAudioContext(1, Math.ceil(arrayBuffer.byteLength / 2), 22050);
+    // Nota: esse fallback pode falhar; propagar erro se não ajudar
+    audioBuffer = await offlineTry.decodeAudioData(arrayBuffer.slice(0));
+  }
+
+  // Processamento (filtros, ganho, etc.)
   audioBuffer = await processAudioBuffer(audioBuffer);
 
+  // Re-renderizar para sampleRate alvo (reduz tamanho)
   const targetRate = 22050;
   const offline = new OfflineAudioContext(1, Math.ceil(audioBuffer.duration * targetRate), targetRate);
   const src = offline.createBufferSource();
@@ -70,72 +152,99 @@ async function compressAndProcessAudio(fileOrBlob) {
   src.start(0);
   const rendered = await offline.startRendering();
 
-  const dest = ctx.createMediaStreamDestination();
-  const bs = ctx.createBufferSource();
+  // Agora, gerar um MediaStream a partir de um AudioContext que exista
+  // Usar um AudioContext temporário se o atual tiver problema
+  const outCtx = ctx;
+  const dest = outCtx.createMediaStreamDestination();
+  const bs = outCtx.createBufferSource();
   bs.buffer = rendered;
   bs.connect(dest);
 
-  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus'
-    : 'audio/webm';
+  // determinar MIME suportado
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
+               (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus') ? 'audio/ogg;codecs=opus' : 'audio/webm');
 
-  const rec = new MediaRecorder(dest.stream, { mimeType: mime, audioBitsPerSecond: 48000 });
+  const options = {};
+  // bitrate opcional (nem todos os browsers respeitam)
+  options.audioBitsPerSecond = 48000;
+
+  const rec = new MediaRecorder(dest.stream, Object.assign({ mimeType: mime }, options));
   const chunks = [];
 
   return new Promise((resolve, reject) => {
+    let stopTimeout = null;
     rec.ondataavailable = e => {
       if (e.data && e.data.size > 0) chunks.push(e.data);
     };
 
-    rec.onstop = () => {
-      const blob = new Blob(chunks, { type: mime });
-      const reader = new FileReader();
-      reader.onload = () => resolve({
-        dataUrl: reader.result,
-        mime,
-        size: blob.size,
-        duration: Math.round(audioBuffer.duration)
-      });
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
+    rec.onerror = e => {
+      reject(new Error((e && e.error && e.error.message) ? e.error.message : 'MediaRecorder erro'));
     };
 
-    rec.onerror = reject;
-
-    rec.start();
-    bs.start(0);
-
-    setTimeout(() => {
+    rec.onstop = async () => {
       try {
-        if (rec.state !== 'inactive') rec.stop();
-      } catch (e) {}
-    }, (audioBuffer.duration * 1000) + 150);
+        const blob = new Blob(chunks, { type: mime });
+        const dataUrl = await blobToDataURL(blob);
+        resolve({
+          dataUrl,
+          mime,
+          size: blob.size,
+          duration: Math.round(audioBuffer.duration)
+        });
+      } catch (e) {
+        reject(e);
+      } finally {
+        if (stopTimeout) clearTimeout(stopTimeout);
+      }
+    };
+
+    try {
+      rec.start();
+      // iniciar a fonte; se falhar, parar gravação de forma segura
+      try { bs.start(0); } catch (e) { /* pode lançar se já iniciado */ }
+
+      // Garantir parada mesmo que algo dê errado: timeout com margem
+      stopTimeout = setTimeout(() => {
+        try {
+          if (rec && rec.state !== 'inactive') rec.stop();
+        } catch (e) {}
+      }, (audioBuffer.duration * 1000) + 500);
+    } catch (e) {
+      reject(e);
+    }
   });
 }
 
-// ========== COMPRESSÃO DE MÍDIA ==========
+/* ========== COMPRESSÃO DE MÍDIA ========== */
 async function compressImage(file, maxW = 1280, quality = 0.72) {
   return new Promise((resolve, reject) => {
+    if (!file) return reject(new Error('Arquivo inválido'));
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      let w = img.width, h = img.height;
-      if (w > maxW) {
-        h = Math.round(h * maxW / w);
-        w = maxW;
+      try {
+        let w = img.width, h = img.height;
+        if (w > maxW) {
+          h = Math.round(h * maxW / w);
+          w = maxW;
+        }
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const ctx2d = c.getContext('2d');
+        // limpar canvas
+        ctx2d.clearRect(0, 0, w, h);
+        ctx2d.drawImage(img, 0, 0, w, h);
+        c.toBlob(blob => {
+          if (!blob) return reject(new Error('Falha ao comprimir imagem'));
+          blobToDataURL(blob).then(dataUrl => {
+            resolve({ dataUrl, mime: 'image/jpeg', size: blob.size });
+          }).catch(reject);
+        }, 'image/jpeg', quality);
+      } catch (e) {
+        reject(e);
       }
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h);
-      c.toBlob(blob => {
-        if (!blob) return reject(new Error('Falha ao comprimir imagem'));
-        const r = new FileReader();
-        r.onload = () => resolve({ dataUrl: r.result, mime: 'image/jpeg', size: blob.size });
-        r.onerror = reject;
-        r.readAsDataURL(blob);
-      }, 'image/jpeg', quality);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -146,6 +255,7 @@ async function compressImage(file, maxW = 1280, quality = 0.72) {
 }
 
 async function prepareMediaFile(file) {
+  if (!file) throw new Error('Arquivo inválido');
   if (file.size > 8 * 1024 * 1024) throw new Error('Arquivo muito grande (máx. 8 MB bruto).');
   const type = file.type || '';
 
@@ -159,37 +269,18 @@ async function prepareMediaFile(file) {
   }
   if (type.startsWith('video/')) {
     if (file.size > 2.2 * 1024 * 1024) throw new Error('Vídeo muito grande (~2.2 MB máx).');
-    return new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res({
-        dataUrl: r.result,
-        mime: file.type,
-        size: file.size,
-        msg_type: 'video',
-        fileName: file.name
-      });
-      r.onerror = rej;
-      r.readAsDataURL(file);
-    });
+    const dataUrl = await blobToDataURL(file);
+    return { dataUrl, mime: file.type, size: file.size, msg_type: 'video', fileName: file.name };
   }
   if (file.size > 1.8 * 1024 * 1024) throw new Error('Arquivo muito grande (~1.8 MB máx).');
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res({
-      dataUrl: r.result,
-      mime: file.type || 'application/octet-stream',
-      size: file.size,
-      msg_type: 'file',
-      fileName: file.name
-    });
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
+  const dataUrl = await blobToDataURL(file);
+  return { dataUrl, mime: file.type || 'application/octet-stream', size: file.size, msg_type: 'file', fileName: file.name };
 }
 
-// ========== MICROFONE ==========
+/* ========== MICROFONE ========== */
 function getPreferredMicConstraints(extra = {}) {
-  const savedId = localStorage.getItem('zap_mic_id');
+  const savedId = (typeof localStorage !== 'undefined') ? localStorage.getItem('zap_mic_id') : null;
+  const audioNoiseReduction = getAudioPref('audioNoiseReduction', true);
   const base = {
     echoCancellation: true,
     noiseSuppression: audioNoiseReduction,
@@ -206,29 +297,28 @@ async function getMicrophoneStream(extraConstraints = {}) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     throw new Error('Seu navegador não suporta acesso ao microfone.');
   }
-  if (!isSecureContext()) {
+  if (!window.isSecureContext) {
     throw new Error('Microfone só funciona em HTTPS ou localhost.');
   }
 
-  const constraints = {
-    audio: getPreferredMicConstraints(extraConstraints),
-    video: false
-  };
+  const constraints = { audio: getPreferredMicConstraints(extraConstraints), video: false };
 
   try {
     return await navigator.mediaDevices.getUserMedia(constraints);
   } catch (err) {
+    // tentar sem constraints específicos
     try {
       return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (err2) {
+      const name = (err && err.name) || (err2 && err2.name) || '';
       let msg = 'Não foi possível acessar o microfone.';
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
         msg = 'Permissão do microfone negada. Ative nas configurações do navegador/app.';
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
         msg = 'Nenhum microfone encontrado neste dispositivo.';
-      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
         msg = 'Microfone em uso por outro aplicativo.';
-      } else if (err.name === 'OverconstrainedError') {
+      } else if (name === 'OverconstrainedError') {
         msg = 'Configuração de microfone não suportada. Tente outro dispositivo nas Configurações.';
       }
       throw new Error(msg);
@@ -236,20 +326,18 @@ async function getMicrophoneStream(extraConstraints = {}) {
   }
 }
 
-// ========== GRAVAÇÃO ==========
-async function startVoiceRecord() {
-  if (isRecording) return;
-  try {
-    getAudioContext();
-    recordingStream = await getMicrophoneStream();
-    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm';
+/* ========== GRAVAÇÃO ========== */
+/* Observação: variáveis globais usadas aqui (isRecording, recordingStream, mediaRecorder, etc.)
+   devem existir no escopo global da sua aplicação; caso não existam, você pode inicializá-las. */
 
-    mediaRecorder = new MediaRecorder(recordingStream, {
-      mimeType: mime,
-      audioBitsPerSecond: 64000
-    });
+async function startVoiceRecord() {
+  try {
+    if (typeof isRecording !== 'undefined' && isRecording) return;
+    if (typeof getAudioContext === 'function') getAudioContext();
+    recordingStream = await getMicrophoneStream();
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+
+    mediaRecorder = new MediaRecorder(recordingStream, { mimeType: mime, audioBitsPerSecond: 64000 });
     recordedChunks = [];
 
     mediaRecorder.ondataavailable = e => {
@@ -259,10 +347,10 @@ async function startVoiceRecord() {
     mediaRecorder.onstop = async () => {
       const blob = new Blob(recordedChunks, { type: mime });
       try {
-        showInAppToast('Processando', 'Aplicando efeitos de áudio...');
+        if (typeof showInAppToast === 'function') showInAppToast('Processando', 'Aplicando efeitos de áudio...');
         const processed = await compressAndProcessAudio(blob);
         if (!activeChatTarget) return;
-
+        // enviar via WS (assumindo sendWS disponível)
         sendWS({
           type: 'chat_message',
           to: activeChatTarget,
@@ -288,53 +376,61 @@ async function startVoiceRecord() {
           isMe: true,
           reply_preview: replyToMessage
         });
-        clearReply();
+        if (typeof clearReply === 'function') clearReply();
       } catch (err) {
         alert(err.message || 'Erro ao processar áudio.');
       } finally {
         stopRecordingTracks();
-        updateRecordUI(false);
+        if (typeof updateRecordUI === 'function') updateRecordUI(false);
       }
+    };
+
+    mediaRecorder.onerror = e => {
+      console.error('mediaRecorder error', e);
     };
 
     mediaRecorder.start(100);
     isRecording = true;
     recordStartTs = Date.now();
-    updateRecordUI(true);
+    if (typeof updateRecordUI === 'function') updateRecordUI(true);
   } catch (err) {
     alert(err.message || 'Não foi possível acessar o microfone.');
     console.error(err);
     stopRecordingTracks();
-    updateRecordUI(false);
+    if (typeof updateRecordUI === 'function') updateRecordUI(false);
   }
 }
 
 function stopRecordingTracks() {
-  if (recordingStream) {
-    recordingStream.getTracks().forEach(t => {
-      try { t.stop(); } catch (e) {}
-    });
-    recordingStream = null;
+  try {
+    if (recordingStream) {
+      recordingStream.getTracks().forEach(t => {
+        try { t.stop(); } catch (e) {}
+      });
+      recordingStream = null;
+    }
+  } catch (e) {
+    console.warn('stopRecordingTracks erro', e);
   }
 }
 
 function stopVoiceRecord() {
-  if (!isRecording || !mediaRecorder) return;
-  isRecording = false;
   try {
-    if (mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-  } catch (e) {}
+    if (typeof isRecording === 'undefined' || !isRecording || !mediaRecorder) return;
+    isRecording = false;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  } catch (e) { console.warn(e); }
 }
 
 function cancelVoiceRecord() {
-  if (!isRecording) return;
-  isRecording = false;
-  recordedChunks = [];
   try {
+    if (typeof isRecording === 'undefined' || !isRecording) return;
+    isRecording = false;
+    recordedChunks = [];
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-  } catch (e) {}
+  } catch (e) { console.warn(e); }
   stopRecordingTracks();
-  updateRecordUI(false);
+  if (typeof updateRecordUI === 'function') updateRecordUI(false);
 }
 
 function updateRecordUI(recording) {
@@ -348,14 +444,15 @@ function updateRecordUI(recording) {
   if (bar) bar.classList.toggle('hidden', !recording);
 }
 
-// ========== ARQUIVO ==========
+/* ========== ARQUIVO ========== */
 async function handleFileSelect(event) {
-  const file = event.target.files && event.target.files[0];
+  const file = event.target && event.target.files && event.target.files[0];
   if (!file || !activeChatTarget) return;
-  event.target.value = '';
+  // limpar input
+  try { event.target.value = ''; } catch (e) {}
 
   try {
-    showInAppToast('Preparando', 'Comprimindo...');
+    if (typeof showInAppToast === 'function') showInAppToast('Preparando', 'Comprimindo...');
     const p = await prepareMediaFile(file);
 
     sendWS({
@@ -383,13 +480,13 @@ async function handleFileSelect(event) {
       isMe: true,
       reply_preview: replyToMessage
     });
-    clearReply();
+    if (typeof clearReply === 'function') clearReply();
   } catch (err) {
     alert(err.message || 'Erro no arquivo');
   }
 }
 
-// ========== MEDIA VIEWER ==========
+/* ========== MEDIA VIEWER ========== */
 function openMediaViewer(src, type) {
   let ov = document.getElementById('media-viewer');
   if (!ov) {
@@ -402,11 +499,13 @@ function openMediaViewer(src, type) {
     document.body.appendChild(ov);
   }
   const content = ov.querySelector('.mv-content');
-  const safeSrc = escapeAttr(src);
+  const safeSrc = typeof escapeAttr === 'function' ? escapeAttr(src) : src;
   if (type === 'image') {
     content.innerHTML = '<img src="' + safeSrc + '" alt="preview">';
   } else if (type === 'video') {
     content.innerHTML = '<video src="' + safeSrc + '" controls autoplay playsinline></video>';
+  } else {
+    content.innerHTML = '<a href="' + safeSrc + '" target="_blank" rel="noopener noreferrer">Abrir mídia</a>';
   }
   ov.classList.remove('hidden');
 }
@@ -420,53 +519,56 @@ function closeMediaViewer() {
   }
 }
 
-// ========== WEBRTC / CHAMADAS ==========
+/* ========== WEBRTC / CHAMADAS ========== */
 window.addEventListener('keydown', e => {
   if (e.key === 'F4') {
     e.preventDefault();
-    toggleMicrophone();
+    if (typeof toggleMicrophone === 'function') toggleMicrophone();
   }
 });
 
 function toggleMicrophone() {
-  if (!currentCall.localStream) return;
+  if (!currentCall || !currentCall.localStream) return;
   isMuted = !isMuted;
-  currentCall.localStream.getAudioTracks().forEach(t => {
-    t.enabled = !isMuted;
-  });
+  currentCall.localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
   const b = document.getElementById('btn-toggle-mic');
   if (b) b.textContent = isMuted ? '🎙️ Desmutar (F4)' : '🎙️ Mutar (F4)';
 }
 
 function onCallIncoming(data) {
-  startRingtoneSound();
+  if (typeof startRingtoneSound === 'function') startRingtoneSound();
   currentCall.targetUser = data.caller;
   currentCall.pendingOffer = data.offer;
-  showPushNotification('Chamada', '@' + data.caller + ' está ligando...', {
-    requireInteraction: true,
-    tag: 'call'
-  });
-  openCallModal(data.callerDisplayName || data.caller, 'Recebendo chamada...', 'incoming');
+  if (typeof showPushNotification === 'function') {
+    showPushNotification('Chamada', '@' + data.caller + ' está ligando...', {
+      requireInteraction: true,
+      tag: 'call'
+    });
+  }
+  if (typeof openCallModal === 'function') openCallModal(data.callerDisplayName || data.caller, 'Recebendo chamada...', 'incoming');
 }
 
 function onIceCandidate(data) {
-  if (currentCall.peerConnection &&
-      currentCall.peerConnection.remoteDescription &&
-      currentCall.peerConnection.remoteDescription.type) {
-    currentCall.peerConnection
-      .addIceCandidate(new RTCIceCandidate(data.candidate))
-      .catch(() => {});
-  } else {
-    pendingIceCandidates.push(data.candidate);
+  try {
+    if (currentCall.peerConnection &&
+        currentCall.peerConnection.remoteDescription &&
+        currentCall.peerConnection.remoteDescription.type) {
+      currentCall.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+    } else {
+      pendingIceCandidates = pendingIceCandidates || [];
+      pendingIceCandidates.push(data.candidate);
+    }
+  } catch (e) {
+    console.warn('onIceCandidate erro', e);
   }
 }
 
 async function startCall(targetUserOverride) {
-  getAudioContext();
-  const target = targetUserOverride || activeChatTarget;
-  if (!target) return alert('Selecione um usuário');
-
   try {
+    if (typeof getAudioContext === 'function') getAudioContext();
+    const target = targetUserOverride || activeChatTarget;
+    if (!target) return alert('Selecione um usuário');
+
     currentCall.targetUser = target;
     currentCall.localStream = await getMicrophoneStream();
     setupPeerConnection();
@@ -476,7 +578,7 @@ async function startCall(targetUserOverride) {
     const offer = await currentCall.peerConnection.createOffer();
     await currentCall.peerConnection.setLocalDescription(offer);
     sendWS({ type: 'call_initiate', callee: target, offer });
-    startRingtoneSound();
+    if (typeof startRingtoneSound === 'function') startRingtoneSound();
     openCallModal(target, 'Chamando...', 'calling');
   } catch (err) {
     alert(err.message || 'Erro no microfone');
@@ -485,17 +587,16 @@ async function startCall(targetUserOverride) {
 }
 
 async function acceptCall() {
-  getAudioContext();
   try {
-    stopRingtoneSound();
+    if (typeof getAudioContext === 'function') getAudioContext();
+    if (typeof stopRingtoneSound === 'function') stopRingtoneSound();
     currentCall.localStream = await getMicrophoneStream();
     setupPeerConnection();
     currentCall.localStream.getTracks().forEach(t => {
       currentCall.peerConnection.addTrack(t, currentCall.localStream);
     });
-    await currentCall.peerConnection.setRemoteDescription(
-      new RTCSessionDescription(currentCall.pendingOffer)
-    );
+    if (!currentCall.pendingOffer) throw new Error('Oferta pendente não encontrada');
+    await currentCall.peerConnection.setRemoteDescription(new RTCSessionDescription(currentCall.pendingOffer));
     await processPendingIceCandidates();
     const answer = await currentCall.peerConnection.createAnswer();
     await currentCall.peerConnection.setLocalDescription(answer);
@@ -508,17 +609,17 @@ async function acceptCall() {
 }
 
 function rejectCall() {
-  if (currentCall.targetUser) {
+  if (currentCall && currentCall.targetUser) {
     sendWS({ type: 'call_reject', caller: currentCall.targetUser });
   }
   cleanupCall();
 }
 
 function setupPeerConnection() {
-  const pc = new RTCPeerConnection(RTC_CONFIG);
+  const pc = new RTCPeerConnection(typeof RTC_CONFIG !== 'undefined' ? RTC_CONFIG : null);
 
   pc.onicecandidate = e => {
-    if (e.candidate && currentCall.targetUser) {
+    if (e.candidate && currentCall && currentCall.targetUser) {
       sendWS({
         type: 'call_ice_candidate',
         to: currentCall.targetUser,
@@ -536,53 +637,61 @@ function setupPeerConnection() {
       a.playsInline = true;
       document.body.appendChild(a);
     }
-    a.srcObject = e.streams[0];
+    a.srcObject = e.streams && e.streams[0] ? e.streams[0] : e.stream;
     a.play().catch(() => {});
   };
 
+  currentCall = currentCall || {};
   currentCall.peerConnection = pc;
 }
 
 async function handleCallAnswered(answer) {
-  if (currentCall.peerConnection) {
-    await currentCall.peerConnection.setRemoteDescription(
-      new RTCSessionDescription(answer)
-    );
-    await processPendingIceCandidates();
-    updateCallModalState('Em chamada', 'active');
+  try {
+    if (currentCall.peerConnection) {
+      await currentCall.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+      await processPendingIceCandidates();
+      updateCallModalState('Em chamada', 'active');
+    }
+  } catch (e) {
+    console.warn('handleCallAnswered erro', e);
   }
 }
 
 async function processPendingIceCandidates() {
+  pendingIceCandidates = pendingIceCandidates || [];
   while (pendingIceCandidates.length) {
     const c = pendingIceCandidates.shift();
     try {
       if (currentCall.peerConnection && currentCall.peerConnection.remoteDescription) {
         await currentCall.peerConnection.addIceCandidate(new RTCIceCandidate(c));
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('processPendingIceCandidates addIceCandidate falhou', e);
+    }
   }
 }
 
 function endCall() {
-  if (currentCall.targetUser) {
+  if (currentCall && currentCall.targetUser) {
     sendWS({ type: 'call_end', to: currentCall.targetUser });
   }
   cleanupCall();
 }
 
 function cleanupCall() {
-  stopRingtoneSound();
-  if (currentCall.localStream) {
-    currentCall.localStream.getTracks().forEach(t => {
-      try { t.stop(); } catch (e) {}
-    });
+  try {
+    if (typeof stopRingtoneSound === 'function') stopRingtoneSound();
+    if (currentCall && currentCall.localStream) {
+      currentCall.localStream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+    }
+    if (currentCall && currentCall.peerConnection) {
+      try { currentCall.peerConnection.close(); } catch (e) {}
+    }
+    const a = document.getElementById('remote-audio');
+    if (a) a.srcObject = null;
+  } catch (e) {
+    console.warn('cleanupCall erro', e);
   }
-  if (currentCall.peerConnection) {
-    try { currentCall.peerConnection.close(); } catch (e) {}
-  }
-  const a = document.getElementById('remote-audio');
-  if (a) a.srcObject = null;
 
   currentCall = {
     peerConnection: null,
@@ -592,7 +701,7 @@ function cleanupCall() {
   };
   pendingIceCandidates = [];
   isMuted = false;
-  closeCallModal();
+  if (typeof closeCallModal === 'function') closeCallModal();
 }
 
 function openCallModal(name, status, state) {
@@ -607,18 +716,22 @@ function updateCallModalState(status, state) {
   const s = document.getElementById('call-status-text');
   if (s) s.textContent = status;
   ['calling', 'incoming', 'active'].forEach(k => {
-    document.getElementById('call-actions-' + k)?.classList.add('hidden');
+    const el = document.getElementById('call-actions-' + k);
+    if (el) el.classList.add('hidden');
   });
   if (state) {
-    document.getElementById('call-actions-' + state)?.classList.remove('hidden');
+    const el = document.getElementById('call-actions-' + state);
+    if (el) el.classList.remove('hidden');
   }
 }
 
 function closeCallModal() {
-  document.getElementById('call-modal')?.classList.add('hidden');
+  const m = document.getElementById('call-modal');
+  if (m) m.classList.add('hidden');
 }
 
-// ========== SETTINGS ==========
+/* ========== SETTINGS ========== */
+
 async function showSettings() {
   const modal = document.getElementById('settings-modal');
   if (!modal) return;
@@ -631,27 +744,32 @@ async function showSettings() {
   if (currentUser) {
     if (dn) dn.value = currentUser.displayName || '';
     if (bio) bio.value = currentUser.bio || '';
-    if (un) un.textContent = '@' + currentUser.username;
+    if (un) un.textContent = '@' + (currentUser.username || '');
   }
 
   const vol = document.getElementById('audio-volume');
   const nr = document.getElementById('audio-noise');
   const sm = document.getElementById('audio-smooth');
+  const audioVolumeBoost = safeNumber(getAudioPref('audioVolumeBoost', 100), 100);
   if (vol) {
     vol.value = audioVolumeBoost;
-    document.getElementById('audio-volume-label').textContent = audioVolumeBoost + '%';
+    const lbl = document.getElementById('audio-volume-label');
+    if (lbl) lbl.textContent = audioVolumeBoost + '%';
   }
-  if (nr) nr.checked = audioNoiseReduction;
-  if (sm) sm.checked = audioSmoothVoice;
+  if (nr) nr.checked = getAudioPref('audioNoiseReduction', true);
+  if (sm) sm.checked = getAudioPref('audioSmoothVoice', false);
 
   const micSelect = document.getElementById('mic-select');
   if (micSelect) {
     micSelect.innerHTML = '';
     try {
+      // solicitar permissão apenas para obter labels (se possível)
       try {
         const s = await navigator.mediaDevices.getUserMedia({ audio: true });
         s.getTracks().forEach(t => t.stop());
-      } catch (e) {}
+      } catch (e) {
+        // ignorar: pode falhar se permissão negada
+      }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputs = devices.filter(d => d.kind === 'audioinput');
@@ -668,7 +786,7 @@ async function showSettings() {
           opt.text = d.label || ('Microfone ' + (i + 1));
           micSelect.appendChild(opt);
         });
-        const saved = localStorage.getItem('zap_mic_id');
+        const saved = (typeof localStorage !== 'undefined') ? localStorage.getItem('zap_mic_id') : null;
         if (saved) micSelect.value = saved;
       }
     } catch (e) {
@@ -723,8 +841,10 @@ function onAudioPrefChange() {
   const nr = document.getElementById('audio-noise');
   const sm = document.getElementById('audio-smooth');
   if (vol) {
-    audioVolumeBoost = Number(vol.value) || 100;
-    document.getElementById('audio-volume-label').textContent = audioVolumeBoost + '%';
+    const value = Number(vol.value);
+    audioVolumeBoost = Number.isFinite(value) ? value : 100;
+    const lbl = document.getElementById('audio-volume-label');
+    if (lbl) lbl.textContent = audioVolumeBoost + '%';
   }
   if (nr) audioNoiseReduction = nr.checked;
   if (sm) audioSmoothVoice = sm.checked;
@@ -734,6 +854,8 @@ function onAudioPrefChange() {
 function onMicChange() {
   const sel = document.getElementById('mic-select');
   if (sel && sel.value) {
-    localStorage.setItem('zap_mic_id', sel.value);
+    try {
+      localStorage.setItem('zap_mic_id', sel.value);
+    } catch (e) {}
   }
 }
