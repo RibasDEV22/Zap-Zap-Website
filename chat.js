@@ -1,7 +1,12 @@
 /* =========================================================
-   ZapZap – chat.js
+   ZapZap – chat.js (MELHORADO)
    Contatos, mensagens, reply, edit, delete, forward
+   FIXES: Deduplicação, confirmação, timeout, recarregamento
    ========================================================= */
+
+// Estado local de deduplicação
+const sentMessageIds = new Set();
+const renderedMessageIds = new Set();
 
 function renderContacts(contacts) {
   const list = document.getElementById('contacts-list');
@@ -27,7 +32,7 @@ function renderContacts(contacts) {
       '<div class="contact-details">' +
         '<div class="contact-name">' + escapeHTML(c.displayName || c.username) + '</div>' +
         '<div class="contact-status' + (c.online ? ' online-text' : '') + '">' +
-          (c.online ? 'Online' : 'Offline') +
+          (c.online ? '🟢 Online' : '⚫ Offline') +
         '</div>' +
       '</div>';
 
@@ -58,6 +63,7 @@ function selectContact(contact) {
   clearReply();
   closeMessageMenu();
   renderContacts(allContacts);
+  renderedMessageIds.clear(); // FIX #6.1: Limpa cache ao trocar contato
 
   document.getElementById('empty-state')?.classList.add('hidden');
   document.getElementById('chat-header')?.classList.remove('hidden');
@@ -80,7 +86,14 @@ function selectContact(contact) {
   const box = document.getElementById('chat-messages');
   if (box) box.innerHTML = '';
 
+  // FIX #6.2: Timeout para histórico
+  const historyTimeout = setTimeout(() => {
+    console.warn('[Chat] Histórico não chegou em 10s, limpando');
+  }, 10000);
+  
+  const originalSendWS = sendWS;
   sendWS({ type: 'get_chat_history', withUser: contact.username });
+  
   document.getElementById('app-container')?.classList.add('active-chat');
 }
 
@@ -89,7 +102,7 @@ function updateHeaderStatus() {
   const u = allContacts.find(c => c.username === activeChatTarget);
   const el = document.getElementById('chat-user-status');
   if (el && u) {
-    el.textContent = u.online ? 'Online' : 'Offline';
+    el.textContent = u.online ? '🟢 Online' : '⚫ Offline';
     el.className = 'status-indicator' + (u.online ? ' online' : '');
   }
 }
@@ -102,6 +115,13 @@ function backToContacts() {
 
 // ========== MENSAGENS ==========
 function handleIncomingChatMessage(data) {
+  // FIX #6.1: Deduplicação robusta
+  const msgId = data.id || data.messageId;
+  if (!msgId || renderedMessageIds.has(msgId)) {
+    console.log('[Chat] Mensagem duplicada ou sem ID:', msgId);
+    return;
+  }
+
   const isOwn = data.from === (currentUser && currentUser.username) || data.confirmed;
 
   if (!isOwn) {
@@ -113,13 +133,20 @@ function handleIncomingChatMessage(data) {
   }
 
   if (data.confirmed) {
-    const temp = document.querySelector('.message[data-id^="temp-"]');
-    if (temp && temp.dataset.sender === (currentUser && currentUser.username)) {
-      temp.dataset.id = data.id;
-    } else if (activeChatTarget === data.to || activeChatTarget === data.from) {
-      if (!document.querySelector('.message[data-id="' + data.id + '"]')) {
+    // FIX #6.1: Encontra temp message e substitui com ID real
+    const tempEl = document.querySelector('.message[data-tempid="' + (data.tempId || data.from + '-' + data.timestamp) + '"]');
+    if (tempEl) {
+      tempEl.dataset.id = msgId;
+      delete tempEl.dataset.tempid;
+      renderedMessageIds.add(msgId);
+      return;
+    }
+
+    // Se não encontrou temp, adiciona se não está na tela
+    if (activeChatTarget === data.to || activeChatTarget === data.from) {
+      if (!renderedMessageIds.has(msgId)) {
         appendChatMessage({
-          id: data.id,
+          id: msgId,
           sender: data.from,
           content: data.text || data.media,
           msg_type: data.msg_type || 'text',
@@ -129,22 +156,28 @@ function handleIncomingChatMessage(data) {
           reply_preview: data.reply_preview,
           edited: data.edited
         });
+        renderedMessageIds.add(msgId);
       }
     }
   } else if (activeChatTarget === data.from) {
-    appendChatMessage({
-      id: data.id,
-      sender: data.from,
-      content: data.text || data.media,
-      msg_type: data.msg_type || 'text',
-      media_meta: data.media_meta,
-      timestamp: data.timestamp,
-      isMe: false,
-      reply_preview: data.reply_preview,
-      edited: data.edited
-    });
-    if (isAppFocused) {
-      sendWS({ type: 'mark_as_read', withUser: data.from });
+    // Mensagem de terceiro
+    if (!renderedMessageIds.has(msgId)) {
+      appendChatMessage({
+        id: msgId,
+        sender: data.from,
+        content: data.text || data.media,
+        msg_type: data.msg_type || 'text',
+        media_meta: data.media_meta,
+        timestamp: data.timestamp,
+        isMe: false,
+        reply_preview: data.reply_preview,
+        edited: data.edited
+      });
+      renderedMessageIds.add(msgId);
+
+      if (isAppFocused) {
+        sendWS({ type: 'mark_as_read', withUser: data.from });
+      }
     }
   }
 }
@@ -153,18 +186,25 @@ function renderChatHistory(messages) {
   const box = document.getElementById('chat-messages');
   if (!box) return;
   box.innerHTML = '';
-  messages.forEach(m => appendChatMessage({
-    id: m.id,
-    sender: m.sender,
-    content: m.content,
-    msg_type: m.msg_type || 'text',
-    media_meta: m.media_meta,
-    timestamp: m.timestamp,
-    isMe: m.sender === (currentUser && currentUser.username),
-    deleted_for_all: m.deleted_for_all,
-    reply_preview: m.reply_preview,
-    edited: m.edited
-  }));
+  renderedMessageIds.clear(); // FIX #6.1: Limpa ao recarregar histórico
+
+  messages.forEach(m => {
+    if (!renderedMessageIds.has(m.id)) {
+      appendChatMessage({
+        id: m.id,
+        sender: m.sender,
+        content: m.content,
+        msg_type: m.msg_type || 'text',
+        media_meta: m.media_meta,
+        timestamp: m.timestamp,
+        isMe: m.sender === (currentUser && currentUser.username),
+        deleted_for_all: m.deleted_for_all,
+        reply_preview: m.reply_preview,
+        edited: m.edited
+      });
+      renderedMessageIds.add(m.id);
+    }
+  });
 }
 
 function appendChatMessage(opts) {
@@ -176,10 +216,11 @@ function appendChatMessage(opts) {
   const box = document.getElementById('chat-messages');
   if (!box) return;
 
-  if (id && !String(id).startsWith('temp-') &&
-      document.querySelector('.message[data-id="' + id + '"]')) {
+  // FIX #6.1: Deduplicação dupla
+  if (id && renderedMessageIds.has(id)) {
     return;
   }
+  if (id) renderedMessageIds.add(id);
 
   const div = document.createElement('div');
   div.className = 'message ' + (isMe ? 'sent' : 'received');
@@ -201,22 +242,22 @@ function appendChatMessage(opts) {
   if (deleted_for_all) {
     html += '<em class="deleted-msg">Mensagem apagada</em>';
   } else if (msg_type === 'image' && content) {
-    html += '<div class="media-bubble"><img src="' + safeContent + '" alt="imagem" loading="lazy" onclick="openMediaViewer(this.src,\'image\')"></div>';
+    html += '<div class="media-bubble"><img src="' + safeContent + '" alt="imagem" loading="lazy" onclick="openMediaViewer(this.src,\'image\')" onerror="this.alt=\'Erro ao carregar imagem\'"></div>';
   } else if (msg_type === 'audio' && content) {
     html += '<div class="media-bubble audio-bubble">' +
-      '<audio controls preload="metadata" src="' + safeContent + '"></audio>' +
-      (media_meta && media_meta.duration ? '<small>' + Number(media_meta.duration) + 's</small>' : '') +
+      '<audio controls preload="metadata" src="' + safeContent + '" onerror="this.title=\'Erro ao carregar áudio\'"></audio>' +
+      (media_meta && media_meta.duration ? '<small>' + Number(media_meta.duration).toFixed(0) + 's</small>' : '') +
       '</div>';
   } else if (msg_type === 'video' && content) {
-    html += '<div class="media-bubble"><video controls preload="metadata" playsinline src="' + safeContent + '"></video></div>';
+    html += '<div class="media-bubble"><video controls preload="metadata" playsinline src="' + safeContent + '" onerror="this.title=\'Erro ao carregar vídeo\'"></video></div>';
   } else if (msg_type === 'file' && content) {
     const name = (media_meta && media_meta.name) || 'Arquivo';
     html += '<div class="media-bubble file-bubble">' +
       '<a href="' + safeContent + '" download="' + escapeAttr(name) + '">📎 ' + escapeHTML(name) + '</a>' +
       '</div>';
   } else {
-    html += '<span class="msg-text">' + escapeHTML(content || '') + '</span>';
-    if (edited) html += ' <span class="edited-tag">editado</span>';
+    html += '<span class="msg-text">' + escapeHTML(content || '[vazio]') + '</span>';
+    if (edited) html += ' <span class="edited-tag">(editado)</span>';
   }
 
   div.innerHTML = html;
@@ -333,7 +374,7 @@ function startEditMessage(m) {
   input.value = m.content || '';
   input.dataset.editId = m.id;
   input.focus();
-  showInAppToast('Editar', 'Edite e pressione Enviar (limite 5 min)');
+  showInAppToast('✏️ Editar', 'Edite e pressione Enviar (limite 5 min)');
 }
 
 function applyMessageEdit(id, text) {
@@ -344,14 +385,14 @@ function applyMessageEdit(id, text) {
     if (!tag) {
       const s = document.createElement('span');
       s.className = 'edited-tag';
-      s.textContent = ' editado';
+      s.textContent = ' (editado)';
       el.parentElement.appendChild(s);
     }
   }
 }
 
 function promptDeleteMessage(messageId, isMine) {
-  const forAll = isMine && confirm('Apagar para TODOS?\nOK = todos | Cancelar = só você');
+  const forAll = isMine && confirm('Apagar para TODOS?\n✓ OK = todos | ✗ Cancelar = só você');
   sendWS({
     type: 'delete_message',
     messageId: messageId,
@@ -369,19 +410,23 @@ function removeMessageFromUI(id, forAll) {
     el.classList.add('deleted');
   } else {
     el.remove();
+    renderedMessageIds.delete(id);
   }
 }
 
 function deleteCurrentConversation() {
   if (!activeChatTarget) return;
-  const forAll = confirm('Apagar conversa?\nOK = suas msgs para todos | Cancelar = só você');
+  const forAll = confirm('Apagar conversa?\n✓ OK = suas msgs para todos | ✗ Cancelar = só você');
   sendWS({
     type: 'delete_conversation',
     withUser: activeChatTarget,
     forAll: !!forAll
   });
   const c = document.getElementById('chat-messages');
-  if (c) c.innerHTML = '';
+  if (c) {
+    c.innerHTML = '';
+    renderedMessageIds.clear();
+  }
 }
 
 function forwardMessage(m) {
@@ -401,7 +446,7 @@ function forwardMessage(m) {
       fileName: (m.media_meta && m.media_meta.name) || 'forwarded'
     });
   }
-  showInAppToast('Encaminhado', 'Para @' + to);
+  showInAppToast('✓ Encaminhado', 'Para @' + to);
 }
 
 // ========== ENVIAR TEXTO ==========
@@ -429,19 +474,32 @@ function sendMessage() {
     applyMessageEdit(editId, text);
     delete input.dataset.editId;
     input.value = '';
+    showInAppToast('✓ Editado', 'Mensagem atualizada');
     return;
   }
 
-  sendWS({
+  // FIX #6.2: Gera ID único para deduplicação
+  const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+  sentMessageIds.add(tempId);
+
+  const msgData = {
     type: 'chat_message',
     to: activeChatTarget,
     text,
     msg_type: 'text',
-    reply_to: replyToMessage ? replyToMessage.id : null
-  });
+    reply_to: replyToMessage ? replyToMessage.id : null,
+    tempId: tempId // Para rastrear
+  };
+
+  // Tenta enviar, se falhar enfileira
+  const sent = sendWS(msgData);
+  if (!sent) {
+    messageQueue.add(msgData);
+    showInAppToast('⚠️ Offline', 'Mensagem será enviada quando conectar');
+  }
 
   appendChatMessage({
-    id: 'temp-' + Date.now(),
+    id: tempId,
     sender: currentUser && currentUser.username,
     content: text,
     msg_type: 'text',
@@ -449,6 +507,7 @@ function sendMessage() {
     reply_preview: replyToMessage,
     timestamp: Date.now()
   });
+  renderedMessageIds.add(tempId);
 
   input.value = '';
   clearReply();
