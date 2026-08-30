@@ -67,14 +67,13 @@ async function compressAndProcessAudio(fileOrBlob) {
   const src = offline.createBufferSource();
   src.buffer = audioBuffer;
   src.connect(offline.destination);
-  src.start();
+  src.start(0);
   const rendered = await offline.startRendering();
 
   const dest = ctx.createMediaStreamDestination();
   const bs = ctx.createBufferSource();
   bs.buffer = rendered;
   bs.connect(dest);
-  bs.start();
 
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
@@ -84,7 +83,10 @@ async function compressAndProcessAudio(fileOrBlob) {
   const chunks = [];
 
   return new Promise((resolve, reject) => {
-    rec.ondataavailable = e => chunks.push(e.data);
+    rec.ondataavailable = e => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+
     rec.onstop = () => {
       const blob = new Blob(chunks, { type: mime });
       const reader = new FileReader();
@@ -97,11 +99,17 @@ async function compressAndProcessAudio(fileOrBlob) {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     };
+
     rec.onerror = reject;
+
     rec.start();
+    bs.start(0);
+
     setTimeout(() => {
-      try { rec.stop(); } catch (e) {}
-    }, (audioBuffer.duration * 1000) + 250);
+      try {
+        if (rec.state !== 'inactive') rec.stop();
+      } catch (e) {}
+    }, (audioBuffer.duration * 1000) + 150);
   });
 }
 
@@ -150,7 +158,7 @@ async function prepareMediaFile(file) {
     return Object.assign(p, { msg_type: 'audio', fileName: file.name });
   }
   if (type.startsWith('video/')) {
-    if (file.size > 2.2 * 1024 * 1024) throw new Error('Vídeo muito grande (~2 MB máx).');
+    if (file.size > 2.2 * 1024 * 1024) throw new Error('Vídeo muito grande (~2.2 MB máx).');
     return new Promise((res, rej) => {
       const r = new FileReader();
       r.onload = () => res({
@@ -164,7 +172,7 @@ async function prepareMediaFile(file) {
       r.readAsDataURL(file);
     });
   }
-  if (file.size > 1.8 * 1024 * 1024) throw new Error('Arquivo muito grande (~1.8 MB).');
+  if (file.size > 1.8 * 1024 * 1024) throw new Error('Arquivo muito grande (~1.8 MB máx).');
   return new Promise((res, rej) => {
     const r = new FileReader();
     r.onload = () => res({
@@ -394,10 +402,11 @@ function openMediaViewer(src, type) {
     document.body.appendChild(ov);
   }
   const content = ov.querySelector('.mv-content');
+  const safeSrc = escapeAttr(src);
   if (type === 'image') {
-    content.innerHTML = '<img src="' + src + '" alt="preview">';
+    content.innerHTML = '<img src="' + safeSrc + '" alt="preview">';
   } else if (type === 'video') {
-    content.innerHTML = '<video src="' + src + '" controls autoplay playsinline></video>';
+    content.innerHTML = '<video src="' + safeSrc + '" controls autoplay playsinline></video>';
   }
   ov.classList.remove('hidden');
 }
