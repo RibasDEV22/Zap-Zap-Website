@@ -45,7 +45,6 @@
                 <div id="update-changelog" class="update-changelog">Buscando...</div>
                 <button id="btn-start-update" class="btn-primary btn-full" type="button">Entendi</button>
             </div>
-            <!-- etapas de progresso/download removidas do fluxo -->
             <div id="update-step-progress" class="update-step hidden"></div>
             <div id="update-step-complete" class="update-step hidden"></div>
         </div>
@@ -243,7 +242,10 @@
         </div>
     </div>
 
+    <!-- Scripts (ordem importante) -->
     <script src="updater.js" defer></script>
-    <script src="app.js" defer></script>
+    <script src="core.js" defer></script>
+    <script src="chat.js" defer></script>
+    <script src="media.js" defer></script>
 </body>
 </html>
