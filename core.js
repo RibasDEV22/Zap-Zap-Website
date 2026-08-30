@@ -1,15 +1,21 @@
 /* =========================================================
-   ZapZap – core.js
+   ZapZap – core.js (MELHORADO)
    Estado global, WebSocket, autenticação, tema, notificações
+   FIXES: Session tokens, reconexão robusta, background suport
    ========================================================= */
 
 const WS_URL = 'wss://zap-zap-24qi.onrender.com';
+const RECONNECT_INTERVALS = [1000, 2000, 4000, 8000, 15000]; // Backoff exponencial
+const MAX_RECONNECT_ATTEMPTS = 15;
+const MESSAGE_QUEUE_STORAGE = 'zap_message_queue';
+const SESSION_STORAGE = 'zap_session_token';
 
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:openrelay.metered.ca:80' },
     { urls: 'turn:openrelay.metered.ca:80', username: 'openrelay', credential: 'openrelay' },
     { urls: 'turn:openrelay.metered.ca:443', username: 'openrelay', credential: 'openrelay' },
@@ -21,6 +27,7 @@ const RTC_CONFIG = {
 let ws = null;
 let pingInterval = null;
 let reconnectTimer = null;
+let reconnectAttempts = 0;
 let currentUser = null;
 let activeChatTarget = null;
 let isMuted = false;
@@ -33,6 +40,10 @@ let selectedMessage = null;
 let longPressTimer = null;
 let searchDebounceTimer = null;
 let isAppFocused = true;
+let messageQueueTimer = null;
+
+// FIX #5.1: Session token do servidor
+let currentSessionToken = localStorage.getItem(SESSION_STORAGE) || null;
 
 // Áudio prefs
 const audioPrefs = JSON.parse(localStorage.getItem('zap_audio_prefs') || '{}');
@@ -59,9 +70,61 @@ let currentCall = {
   peerConnection: null,
   localStream: null,
   targetUser: null,
-  pendingOffer: null
+  pendingOffer: null,
+  isActive: false
 };
 let pendingIceCandidates = [];
+
+// ========== FILA DE MENSAGENS (PERSISTÊNCIA) ==========
+class MessageQueue {
+  constructor() {
+    this.queue = this.loadQueue();
+  }
+
+  add(message) {
+    const item = {
+      id: 'temp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+      data: message,
+      timestamp: Date.now(),
+      retries: 0
+    };
+    this.queue.push(item);
+    this.saveQueue();
+    return item;
+  }
+
+  remove(id) {
+    this.queue = this.queue.filter(m => m.id !== id);
+    this.saveQueue();
+  }
+
+  getAll() {
+    return this.queue.filter(m => Date.now() - m.timestamp < 300000); // 5 min
+  }
+
+  clear() {
+    this.queue = [];
+    this.saveQueue();
+  }
+
+  saveQueue() {
+    try {
+      localStorage.setItem(MESSAGE_QUEUE_STORAGE, JSON.stringify(this.queue));
+    } catch (e) {
+      console.warn('[Queue] Erro ao salvar fila:', e.message);
+    }
+  }
+
+  loadQueue() {
+    try {
+      return JSON.parse(localStorage.getItem(MESSAGE_QUEUE_STORAGE) || '[]');
+    } catch {
+      return [];
+    }
+  }
+}
+
+const messageQueue = new MessageQueue();
 
 // ========== HELPERS ==========
 function setCookie(name, value, days = 365) {
@@ -181,7 +244,8 @@ function showPushNotification(title, body, options = {}) {
         tag: options.tag || 'zapzap',
         renotify: true,
         requireInteraction: !!options.requireInteraction,
-        silent: false
+        silent: false,
+        badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">⚡</text></svg>'
       });
       n.onclick = () => {
         window.focus();
@@ -208,7 +272,7 @@ function showInAppToast(title, body) {
   t._timer = setTimeout(() => t.classList.remove('show'), 4000);
 }
 
-// ========== VISIBILIDADE ==========
+// ========== VISIBILIDADE & BACKGROUND ==========
 function sendAppVisibility(focused) {
   isAppFocused = !!focused;
   sendWS({ type: 'app_visibility', focused: isAppFocused });
@@ -216,13 +280,19 @@ function sendAppVisibility(focused) {
 
 function setupVisibilityListeners() {
   document.addEventListener('visibilitychange', () => {
-    sendAppVisibility(document.visibilityState === 'visible');
+    const isFocused = document.visibilityState === 'visible';
+    sendAppVisibility(isFocused);
+    if (isFocused) {
+      // FIX #5.4: Recarrega contatos e announcements ao retornar
+      sendWS({ type: 'get_contacts' });
+      sendWS({ type: 'get_announcements' });
+    }
   });
   window.addEventListener('focus', () => sendAppVisibility(true));
   window.addEventListener('blur', () => sendAppVisibility(false));
 }
 
-// ========== WEBSOCKET ==========
+// ========== WEBSOCKET COM RECONEXÃO ROBUSTA ==========
 function hideSplashScreen() {
   const bar = document.getElementById('splash-bar');
   const ov = document.getElementById('splash-screen');
@@ -243,24 +313,37 @@ function connectWebSocket() {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
+    console.log('[WS] Conectado');
+    reconnectAttempts = 0;
     updateNetworkStatus('online', 'Conectado');
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => sendWS({ type: 'ping' }), 25000);
 
     sendAppVisibility(document.visibilityState === 'visible');
 
-    const saved = localStorage.getItem('zap_session');
-    if (saved) {
-      try {
-        const c = JSON.parse(saved);
-        sendWS({ type: 'login', username: c.username, password: c.password });
-      } catch {
-        localStorage.removeItem('zap_session');
+    // FIX #5.1: Tenta reconectar com session token
+    const token = localStorage.getItem(SESSION_STORAGE);
+    if (token) {
+      console.log('[WS] Reconectando com session token');
+      sendWS({ type: reconnect_session, sessionToken: token });
+    } else {
+      // Tenta autenticar com credenciais antigas
+      const saved = localStorage.getItem('zap_session');
+      if (saved) {
+        try {
+          const c = JSON.parse(saved);
+          sendWS({ type: 'login', username: c.username, password: c.password });
+        } catch {
+          localStorage.removeItem('zap_session');
+          hideSplashScreen();
+        }
+      } else {
         hideSplashScreen();
       }
-    } else {
-      hideSplashScreen();
     }
+
+    // Processa fila de mensagens pendentes
+    flushMessageQueue();
   };
 
   ws.onmessage = e => {
@@ -269,23 +352,35 @@ function connectWebSocket() {
       if (data.type === 'pong') return;
       handleServerMessage(data);
     } catch (err) {
-      console.error('[WS] Erro ao processar mensagem do servidor:', err);
+      console.error('[WS] Erro ao processar mensagem:', err);
     }
   };
 
-  ws.onerror = () => {
+  ws.onerror = (error) => {
+    console.error('[WS] Erro:', error);
     updateNetworkStatus('offline', 'Erro de conexão');
     hideSplashScreen();
   };
 
   ws.onclose = () => {
+    console.log('[WS] Desconectado. Tentando reconectar...');
     if (pingInterval) clearInterval(pingInterval);
     updateNetworkStatus('connecting', 'Reconectando...');
-    if (!reconnectTimer) {
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connectWebSocket();
-      }, 2800);
+    
+    // FIX #5.2: Backoff exponencial
+    const interval = RECONNECT_INTERVALS[Math.min(reconnectAttempts, RECONNECT_INTERVALS.length - 1)];
+    reconnectAttempts++;
+
+    if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectWebSocket();
+        }, interval);
+      }
+    } else {
+      updateNetworkStatus('offline', 'Falha ao conectar. Recarregando...');
+      setTimeout(() => location.reload(), 3000);
     }
   };
 }
@@ -300,7 +395,29 @@ function updateNetworkStatus(state, msg) {
 function sendWS(data) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
+    return true;
   }
+  return false;
+}
+
+// ========== FILA DE MENSAGENS ==========
+function flushMessageQueue() {
+  if (messageQueueTimer) clearTimeout(messageQueueTimer);
+  messageQueueTimer = setTimeout(() => {
+    const pending = messageQueue.getAll();
+    if (pending.length === 0) return;
+
+    pending.forEach(item => {
+      if (item.retries < 3 && sendWS(Object.assign({}, item.data))) {
+        messageQueue.remove(item.id);
+      } else if (item.retries >= 3) {
+        messageQueue.remove(item.id);
+      } else {
+        item.retries++;
+        messageQueue.saveQueue();
+      }
+    });
+  }, 1000);
 }
 
 // ========== HANDLER CENTRAL DE MENSAGENS DO SERVIDOR ==========
@@ -308,6 +425,11 @@ function handleServerMessage(data) {
   switch (data.type) {
     case 'auth_success':
       currentUser = data.user;
+      // FIX #5.1: Salva session token do servidor
+      if (data.sessionToken) {
+        currentSessionToken = data.sessionToken;
+        localStorage.setItem(SESSION_STORAGE, data.sessionToken);
+      }
       if (data.credentials) {
         localStorage.setItem('zap_session', JSON.stringify(data.credentials));
       }
@@ -322,6 +444,15 @@ function handleServerMessage(data) {
     case 'auth_error':
       hideSplashScreen();
       showAuthError(data.message || 'Erro de autenticação');
+      break;
+
+    case 'reconnect_success':
+      console.log('[WS] Reconexão com token bem-sucedida');
+      currentUser = data.user;
+      showMainScreen();
+      renderUserProfile();
+      sendWS({ type: 'get_contacts' });
+      sendWS({ type: 'get_announcements' });
       break;
 
     case 'contacts_list':
@@ -384,6 +515,7 @@ function handleServerMessage(data) {
 
     case 'maintenance_active':
       alert(data.message || 'Servidor em manutenção. Tente novamente mais tarde.');
+      localStorage.removeItem(SESSION_STORAGE);
       localStorage.removeItem('zap_session');
       location.reload();
       break;
@@ -402,7 +534,7 @@ function handleServerMessage(data) {
       break;
 
     case 'announcement_new':
-      showInAppToast('Aviso', data.message || 'Novo recado do administrador');
+      showPushNotification('Aviso', data.message || 'Novo recado do administrador');
       break;
 
     case 'account_restricted':
@@ -432,6 +564,12 @@ function handleServerMessage(data) {
       break;
     case 'call_ended':
       if (typeof cleanupCall === 'function') cleanupCall();
+      break;
+    case 'reaction_updated':
+    case 'reaction_removed':
+      if (typeof applyReactionUpdate === 'function') {
+        applyReactionUpdate(data);
+      }
       break;
 
     default:
@@ -543,13 +681,28 @@ function renderUserProfile() {
 
 function logout() {
   localStorage.removeItem('zap_session');
+  localStorage.removeItem(SESSION_STORAGE);
+  currentSessionToken = null;
+  messageQueue.clear();
   location.reload();
+}
+
+// ========== SERVICE WORKER REGISTRATION ==========
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator && isSecureContext()) {
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      console.log('[SW] Registrado:', reg);
+    }).catch(err => {
+      console.log('[SW] Erro ao registrar:', err);
+    });
+  }
 }
 
 // ========== INIT ==========
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(currentTheme);
   setupVisibilityListeners();
+  registerServiceWorker();
   connectWebSocket();
 
   if (getCookie('zap_notif') === '1' || Notification.permission === 'granted') {
@@ -561,4 +714,18 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof closeMessageMenu === 'function') closeMessageMenu();
     }
   });
+
+  // Mantém app vivo em background
+  if ('serviceWorker' in navigator && currentCall.isActive) {
+    navigator.serviceWorker.ready.then(reg => {
+      reg.active?.postMessage({ type: 'keep_alive' });
+    });
+  }
+});
+
+// Limpa antes de sair
+window.addEventListener('beforeunload', () => {
+  if (currentCall.isActive) {
+    sendWS({ type: 'call_end', to: currentCall.targetUser });
+  }
 });
