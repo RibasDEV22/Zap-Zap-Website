@@ -20,6 +20,7 @@ const RTC_CONFIG = {
 // ========== ESTADO GLOBAL ==========
 let ws = null;
 let pingInterval = null;
+let reconnectTimer = null;
 let currentUser = null;
 let activeChatTarget = null;
 let isMuted = false;
@@ -77,6 +78,12 @@ function getCookie(name) {
 function escapeHTML(str) {
   return String(str ?? '').replace(/[&<>"']/g, m => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[m]));
+}
+
+function escapeAttr(str) {
+  return String(str ?? '').replace(/["'&<>]/g, m => ({
+    '"': '&quot;', "'": '&#39;', '&': '&amp;', '<': '&lt;', '>': '&gt;'
   }[m]));
 }
 
@@ -228,6 +235,11 @@ function hideSplashScreen() {
 function connectWebSocket() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
@@ -257,7 +269,7 @@ function connectWebSocket() {
       if (data.type === 'pong') return;
       handleServerMessage(data);
     } catch (err) {
-      console.error('[WS] parse error', err);
+      console.error('[WS] Erro ao processar mensagem do servidor:', err);
     }
   };
 
@@ -269,7 +281,12 @@ function connectWebSocket() {
   ws.onclose = () => {
     if (pingInterval) clearInterval(pingInterval);
     updateNetworkStatus('connecting', 'Reconectando...');
-    setTimeout(connectWebSocket, 2800);
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWebSocket();
+      }, 2800);
+    }
   };
 }
 
@@ -359,7 +376,6 @@ function handleServerMessage(data) {
       break;
 
     case 'messages_read':
-      // futuramente: atualizar indicadores de leitura
       break;
 
     case 'chat_error':
@@ -389,14 +405,10 @@ function handleServerMessage(data) {
       showInAppToast('Aviso', data.message || 'Novo recado do administrador');
       break;
 
-    case 'announcement_removed':
-      break;
-
     case 'account_restricted':
       alert(data.message || 'Sua conta está temporariamente restrita.');
       break;
 
-    // ===== Chamadas (WebRTC) =====
     case 'call_incoming':
       if (typeof onCallIncoming === 'function') onCallIncoming(data);
       break;
@@ -423,7 +435,6 @@ function handleServerMessage(data) {
       break;
 
     default:
-      // tipos desconhecidos ou removidos do servidor → ignorados
       break;
   }
 }
