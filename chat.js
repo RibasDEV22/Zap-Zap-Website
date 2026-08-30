@@ -196,21 +196,23 @@ function appendChatMessage(opts) {
       '</div>';
   }
 
+  const safeContent = escapeAttr(content || '');
+
   if (deleted_for_all) {
     html += '<em class="deleted-msg">Mensagem apagada</em>';
   } else if (msg_type === 'image' && content) {
-    html += '<div class="media-bubble"><img src="' + content + '" alt="img" loading="lazy" onclick="openMediaViewer(this.src,\'image\')"></div>';
+    html += '<div class="media-bubble"><img src="' + safeContent + '" alt="imagem" loading="lazy" onclick="openMediaViewer(this.src,\'image\')"></div>';
   } else if (msg_type === 'audio' && content) {
     html += '<div class="media-bubble audio-bubble">' +
-      '<audio controls preload="metadata" src="' + content + '"></audio>' +
-      (media_meta && media_meta.duration ? '<small>' + media_meta.duration + 's</small>' : '') +
+      '<audio controls preload="metadata" src="' + safeContent + '"></audio>' +
+      (media_meta && media_meta.duration ? '<small>' + Number(media_meta.duration) + 's</small>' : '') +
       '</div>';
   } else if (msg_type === 'video' && content) {
-    html += '<div class="media-bubble"><video controls preload="metadata" playsinline src="' + content + '"></video></div>';
+    html += '<div class="media-bubble"><video controls preload="metadata" playsinline src="' + safeContent + '"></video></div>';
   } else if (msg_type === 'file' && content) {
     const name = (media_meta && media_meta.name) || 'Arquivo';
     html += '<div class="media-bubble file-bubble">' +
-      '<a href="' + content + '" download="' + escapeHTML(name) + '">📎 ' + escapeHTML(name) + '</a>' +
+      '<a href="' + safeContent + '" download="' + escapeAttr(name) + '">📎 ' + escapeHTML(name) + '</a>' +
       '</div>';
   } else {
     html += '<span class="msg-text">' + escapeHTML(content || '') + '</span>';
@@ -219,7 +221,6 @@ function appendChatMessage(opts) {
 
   div.innerHTML = html;
 
-  // Long-press / swipe para responder
   let startX = 0, startY = 0, moved = false;
 
   const onStart = (e) => {
@@ -353,7 +354,7 @@ function promptDeleteMessage(messageId, isMine) {
   const forAll = isMine && confirm('Apagar para TODOS?\nOK = todos | Cancelar = só você');
   sendWS({
     type: 'delete_message',
-    messageId: Number(messageId),
+    messageId: messageId,
     forAll: !!forAll,
     withUser: activeChatTarget
   });
@@ -421,7 +422,7 @@ function sendMessage() {
   if (editId) {
     sendWS({
       type: 'edit_message',
-      messageId: Number(editId),
+      messageId: editId,
       text,
       withUser: activeChatTarget
     });
